@@ -1,0 +1,28 @@
+# Team: Backend Feature
+# Full team for backend feature development.
+# Explorer scopes the change, Creator designs the approach, Maker implements,
+# Guardian + Sage review for security and quality.
+
+name: backend-feature
+description: "Backend feature development: scope, design, implement, review"
+domain: code
+
+# Plan: explorer maps affected code, creator designs the approach with
+#        API contract, DB schema changes, and test strategy.
+plan: [explorer, creator]
+
+# Do: maker implements the feature — code, migration, tests.
+do: [maker]
+
+# Check: guardian reviews for security, breaking changes, error handling.
+#         sage reviews for code quality, test coverage, documentation.
+check: [guardian, sage]
+
+exit: all_approved
+max_cycles: ${max_cycles}
+
+# Notes:
+# - All archetypes are standard (no custom archetypes needed for code)
+# - Guardian focuses on security and breaking changes (code domain review_focus)
+# - Sage focuses on quality and test coverage (code domain review_focus)
+# - Explorer is critical for scoping — finds affected files, existing tests, dependencies

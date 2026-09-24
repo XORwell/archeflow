@@ -1,0 +1,36 @@
+name: compliance-gdpr
+description: Flag personal data handling, consent gaps, and retention violations
+version: "1.0"
+
+finding_categories:
+  - pii-exposure
+  - consent-missing
+  - retention-violation
+  - cross-border-transfer
+  - right-to-delete-gap
+
+context_inject:
+  always:
+    - .archeflow/checklists/gdpr-checklist.md
+  plan:
+    - .archeflow/checklists/data-flow-template.md
+
+attention:
+  guardian:
+    weight: 1.3
+    extra_focus: "personal data flows, PII in logs, unencrypted storage, third-party data sharing"
+    extra_categories: [pii-exposure, cross-border-transfer]
+  skeptic:
+    extra_focus: "consent assumptions, legitimate interest claims, data minimization"
+    extra_categories: [consent-missing, retention-violation]
+  sage:
+    extra_focus: "documentation completeness, privacy-by-design patterns, DPIA triggers"
+    extra_categories: [right-to-delete-gap]
+
+evidence_rules:
+  - category: pii-exposure
+    requires: [data_type, location, protection_status]
+  - category: consent-missing
+    requires: [data_operation, legal_basis_claimed, why_insufficient]
+  - category: retention-violation
+    requires: [data_type, current_retention, required_retention]

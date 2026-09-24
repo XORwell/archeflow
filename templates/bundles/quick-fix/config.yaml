@@ -1,0 +1,25 @@
+# Config: quick-fix defaults
+# Minimal budget, haiku everywhere. Quick fixes should be cheap and fast.
+# If the fix escalates (A1 rule), budget may need manual increase.
+
+costs:
+  budget_usd: 2              # Tight budget — this is a small fix
+  warn_at_percent: 80
+
+models:
+  default: haiku           # Haiku for everything — speed over depth
+  creator: haiku
+  maker: haiku
+  guardian: haiku
+
+variables:
+  max_cycles: 1
+  lint_command: ""
+
+# Post-merge tests: set test_command at the TOP LEVEL of .archeflow/config.yaml
+# (not under variables:). Unset = post-merge tests are skipped.
+# test_command: "npm test"
+
+# git:
+#   auto_merge: false        # true = merge without asking once all reviewers approve
+#   merge_strategy: no-ff    # no-ff | squash | rebase

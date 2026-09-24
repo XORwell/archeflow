@@ -1,0 +1,40 @@
+name: prose-voice
+description: Enforce voice consistency, dialect authenticity, and narrative coherence
+version: "1.0"
+
+finding_categories:
+  - voice-drift
+  - dialect-break
+  - register-mismatch
+  - pacing-dead-spot
+  - continuity-error
+
+context_inject:
+  always:
+    - voice-profile.md
+    - character-sheet.md
+  check:
+    - .archeflow/checklists/prose-review.md
+
+attention:
+  sage:
+    weight: 1.5
+    extra_focus: "voice consistency across scenes, dialect density, register shifts, sentence rhythm variation"
+    extra_categories: [voice-drift, dialect-break, register-mismatch]
+  guardian:
+    extra_focus: "plot coherence, timeline consistency, character continuity, factual contradictions"
+    extra_categories: [continuity-error]
+  trickster:
+    extra_focus: "reader confusion points, suspension of disbelief breaks, unearned emotional beats"
+    extra_categories: [pacing-dead-spot]
+
+model_overrides:
+  sage: sonnet  # voice evaluation needs taste
+
+evidence_rules:
+  - category: voice-drift
+    requires: [passage_quote, expected_voice, actual_voice]
+  - category: dialect-break
+    requires: [passage_quote, expected_dialect_marker, what_went_wrong]
+  - category: continuity-error
+    requires: [contradicting_passages, chapter_references]

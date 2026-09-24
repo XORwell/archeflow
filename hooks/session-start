@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# SessionStart hook for the ArcheFlow plugin.
+#
+# Injects skills/using-archeflow/ACTIVATION.md (minus its YAML frontmatter) as
+# additional session context, prefixed with the resolved plugin root:
+#   "ArcheFlow root: <abs path>" -- skills call scripts as <archeflow-root>/lib/...
+# because marketplace installs live under ~/.claude/plugins/cache/..., not CWD.
+# Pure Bash + jq, no Node.js required.
+#
+# Output contract (stdout, always exit 0):
+#   {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}
+#   or "{}" when the activation file is missing, empty, unreadable, or jq is
+#   unavailable. A hook failure must never break session start.
+#
+# The activation file is always read relative to this script's own location,
+# never from environment variables or hook input (no path-traversal surface).
+# The advertised root is $CLAUDE_PLUGIN_ROOT when it points at an ArcheFlow
+# checkout (contains lib/archeflow-event.sh), else this script's dir/..
+
+set -uo pipefail
+
+emit_empty() {
+  printf '{}\n'
+  exit 0
+}
+
+trap emit_empty ERR
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)" || emit_empty
+plugin_root="$(cd "${script_dir}/.." 2>/dev/null && pwd -P)" || emit_empty
+skill_file="${plugin_root}/skills/using-archeflow/ACTIVATION.md"
+
+archeflow_root="$plugin_root"
+if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "${CLAUDE_PLUGIN_ROOT}/lib/archeflow-event.sh" ]]; then
+  archeflow_root="$(cd "$CLAUDE_PLUGIN_ROOT" 2>/dev/null && pwd)" || archeflow_root="$plugin_root"
+fi
+
+[[ -f "$skill_file" && -r "$skill_file" ]] || emit_empty
+command -v jq >/dev/null 2>&1 || emit_empty
+
+# Strip a leading YAML frontmatter block (same semantics as the former Node
+# regex /^---\n[\s\S]*?\n---\n?/), then emit compact JSON. \A anchors to the
+# start of the input (Oniguruma's ^ would match at every line start).
+output="$(jq -cn --rawfile raw "$skill_file" --arg root "$archeflow_root" '
+  ($raw | sub("\\A---\n[\\s\\S]*?\n---\n?"; "")) as $body
+  | if ($body | test("\\A\\s*\\z")) then {}
+    else {hookSpecificOutput: {hookEventName: "SessionStart",
+          additionalContext: ("ArcheFlow root: " + $root + "\n\n" + $body)}}
+    end
+' 2>/dev/null)" || emit_empty
+
+[[ -n "$output" ]] || emit_empty
+printf '%s\n' "$output"

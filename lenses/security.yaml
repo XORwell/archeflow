@@ -1,0 +1,42 @@
+name: security
+description: Sharpen review for vulnerabilities, auth issues, and data exposure
+version: "1.0"
+
+finding_categories:
+  - cve
+  - injection
+  - auth-bypass
+  - data-leak
+  - secrets-exposure
+
+context_inject:
+  check:
+    - .archeflow/checklists/owasp-top-10.md
+
+attention:
+  guardian:
+    weight: 1.5
+    extra_focus: "authentication, authorization, input validation, secrets in code, dependency vulnerabilities"
+    extra_categories: [cve, injection, auth-bypass, data-leak, secrets-exposure]
+  trickster:
+    weight: 1.3
+    extra_focus: "injection vectors, privilege escalation, session hijacking, SSRF"
+    extra_categories: [injection, auth-bypass]
+  skeptic:
+    extra_focus: "trust boundaries, threat model assumptions, implicit trust in inputs"
+
+shadow_overrides:
+  guardian:
+    paranoid_ratio_threshold: 4  # allow more CRITICALs before flagging Paranoid
+
+evidence_rules:
+  - category: cve
+    requires: [cve_id, affected_component, exploit_path]
+  - category: injection
+    requires: [injection_type, entry_point, payload_example]
+  - category: auth-bypass
+    requires: [bypass_mechanism, reproduction_steps]
+  - category: data-leak
+    requires: [data_type, exposure_path]
+  - category: secrets-exposure
+    requires: [secret_type, file_location]

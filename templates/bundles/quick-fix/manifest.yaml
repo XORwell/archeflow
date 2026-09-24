@@ -1,0 +1,18 @@
+# Bundle: quick-fix
+# Minimal setup for small bug fixes and patches. Fast workflow with 1 cycle,
+# reduced team (no Explorer or Sage), and low budget. Get in, fix, get out.
+
+name: quick-fix
+description: "Small bug fix or patch — minimal team, 1 fast cycle, low overhead"
+version: "1.0.0"
+domain: code
+includes:
+  team: team.yaml
+  workflow: workflow.yaml
+  domain: domain.yaml
+  config: config.yaml
+  archetypes: []
+requires: []
+variables:
+  max_cycles: 1            # Fast: single cycle, ship it
+  lint_command: ""         # Override: ruff, clippy, eslint, etc.

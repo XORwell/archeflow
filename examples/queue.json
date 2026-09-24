@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "mode": "ATTENDED",
+  "last_maintained": "2026-09-24T09:00:00Z",
+  "items": [
+    {
+      "id": "api-service-rate-limit-login",
+      "project": "api-service",
+      "task": "Add rate limiting to POST /login (100 requests/min per IP, return 429 with Retry-After). Add tests for the limit and for the Redis-down fallback.",
+      "priority": "P1",
+      "estimate": "M",
+      "status": "pending",
+      "depends_on": [],
+      "notes": ""
+    },
+    {
+      "id": "docs-site-fix-broken-links",
+      "project": "docs-site",
+      "task": "Run the link checker and fix every broken internal link.",
+      "priority": "P2",
+      "estimate": "S",
+      "status": "pending",
+      "depends_on": [],
+      "notes": ""
+    },
+    {
+      "id": "docs-site-document-rate-limit",
+      "project": "docs-site",
+      "task": "Document the new login rate limit (limit, response code, Retry-After header) in the API reference.",
+      "priority": "P2",
+      "estimate": "S",
+      "status": "pending",
+      "depends_on": [
+        "api-service-rate-limit-login"
+      ],
+      "notes": "Wait until the api-service change is merged so the documented values match."
+    },
+    {
+      "id": "api-service-upgrade-test-deps",
+      "project": "api-service",
+      "task": "Next action from docs/status.md: \"Upgrade the test dependencies and fix deprecation warnings.\"",
+      "priority": "P3",
+      "estimate": "S",
+      "status": "proposed",
+      "source": "api-service/docs/status.md",
+      "depends_on": [],
+      "notes": "Added by /archeflow:scan. Runs only after you approve it in a sprint session."
+    }
+  ]
+}

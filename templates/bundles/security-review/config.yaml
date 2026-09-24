@@ -1,0 +1,30 @@
+# Config: security-review defaults
+# Higher budget for thorough security analysis. Guardian gets sonnet for deeper
+# vulnerability detection. Other reviewers use haiku to stay within budget.
+
+costs:
+  budget_usd: 15             # 3 cycles with full team needs more budget
+  warn_at_pct: 70         # Warn earlier — security reviews should not be cut short
+
+models:
+  default: haiku           # Most analysis is pattern-matching
+  explorer: haiku          # Attack surface mapping is analytical
+  creator: haiku           # Checklist creation is structural
+  maker: haiku             # Fixes are targeted edits
+  guardian: sonnet          # Primary security gate — needs depth
+  sage: haiku              # Quality review is checklist-driven
+  skeptic: haiku           # Design review is analytical
+  trickster: haiku         # Adversarial testing is creative but bounded
+
+variables:
+  max_cycles: 3
+  target_paths: ""
+  threat_model: ""
+
+# Post-merge tests: set test_command at the TOP LEVEL of .archeflow/config.yaml
+# (not under variables:). Unset = post-merge tests are skipped.
+# test_command: "npm test"
+
+# git:
+#   auto_merge: false        # true = merge without asking once all reviewers approve
+#   merge_strategy: no-ff    # no-ff | squash | rebase

@@ -1,0 +1,50 @@
+# Example: custom workflow definition
+#
+# Save as .archeflow/workflows/api-design.yaml in your project.
+# Same format as the workflow.yaml files of the built-in bundles in templates/bundles/
+# (archeflow-init.sh copies those into .archeflow/workflows/).
+#
+# Rules (see the workflow-design skill): Plan always includes creator, Do is always maker,
+# Check needs at least one reviewer, at most 3 roles per phase.
+#
+# Current limitation: /archeflow:run picks one of the built-in workflows (fast, standard,
+# thorough) and does not load this file yet. Use it with the workflow-design skill, or as a
+# template you share with archeflow-init.sh --save / --share.
+
+name: api-design
+description: "API-first workflow: contract review plus adversarial testing"
+
+phases:
+  plan:
+    archetypes: [explorer, creator]
+    parallel: false            # sequential: the Explorer's findings feed the Creator
+    description: |
+      Explorer maps the existing endpoints, clients and error conventions.
+      Creator writes the API contract first (paths, request/response schemas,
+      error codes), then the implementation plan and the test strategy.
+    inputs:
+      - "Task description"
+      - "Existing API routes and their tests"
+
+  do:
+    archetypes: [maker]
+    parallel: false
+    description: |
+      Implement the contract exactly as proposed. Contract tests first, then the handlers.
+    inputs:
+      - "Creator's proposal (contract + plan)"
+
+  check:
+    archetypes: [guardian, skeptic, trickster]
+    parallel: true             # reviewers run at the same time
+    description: |
+      Guardian: authentication, input validation, error leakage.
+      Skeptic: does the contract match what clients actually need?
+      Trickster: malformed payloads, boundary values, unexpected content types.
+    inputs:
+      - "git diff from Maker"
+      - "Creator's proposal"
+
+  act:
+    exit_when: all_approved    # all_approved | no_critical | convergence | always
+    max_cycles: 2

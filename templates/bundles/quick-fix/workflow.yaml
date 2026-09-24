@@ -1,0 +1,66 @@
+# Workflow: Quick Fix
+# Fast PDCA for small bug fixes. 1 cycle, minimal team.
+# If the fix is clean, ships in a single pass.
+# If Guardian escalates (A1 rule), second cycle adds more reviewers automatically.
+
+name: quick-fix
+description: "Fast bug fix — 1 cycle, creator + maker + guardian"
+team: quick-fix
+
+phases:
+  plan:
+    archetypes: [creator]
+    parallel: false
+    description: |
+      Creator identifies root cause and designs the fix:
+      - What is the bug? (reproduce or confirm from description)
+      - Where is the root cause? (file, function, line)
+      - What is the fix? (specific change, not a rewrite)
+      - What could break? (regression risk assessment)
+      - What test proves it's fixed?
+      Keep it brief — this is a patch, not a feature.
+    inputs:
+      - "Bug report / description"
+      - "Relevant source files"
+      - "Existing tests for affected area"
+
+  do:
+    archetypes: [maker]
+    parallel: false
+    description: |
+      Apply the fix. Keep changes minimal and focused.
+      1. Make the code change
+      2. Add or update test that reproduces the bug and verifies the fix
+      3. Run the project tests (`test_command` in .archeflow/config.yaml, or the usual test command) — all must pass
+      4. Run lint (${lint_command}) — no new warnings
+      5. Single commit with descriptive message
+    inputs:
+      - "Creator's fix proposal"
+      - "Affected source files"
+
+  check:
+    archetypes: [guardian]
+    parallel: false
+    description: |
+      Guardian sanity-checks the fix:
+      - Does the fix address the root cause (not just the symptom)?
+      - Are there regressions? (check test coverage of changed code)
+      - Any security implications?
+      - Any breaking changes to public API?
+      If clean: APPROVED. If 2+ CRITICALs: A1 escalation kicks in automatically.
+    inputs:
+      - "git diff from Maker"
+      - "Creator's fix proposal (regression risk section)"
+
+  act:
+    exit_when: all_approved
+    max_cycles: ${max_cycles}
+    on_reject: |
+      Guardian rejection: fix the specific issue and re-run tests.
+      If the fix is growing in scope, consider switching to backend-feature bundle.
+      A1 escalation (2+ CRITICALs) adds Sage + Skeptic — accept the cost.
+
+hooks:
+  pre_plan: []
+  post_check: []
+  post_act: []

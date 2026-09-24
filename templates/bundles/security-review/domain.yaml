@@ -1,0 +1,84 @@
+# Domain: Code (Security Focus)
+# Standard code domain with security-weighted review focus.
+# Extends the default code domain with stronger security emphasis.
+
+name: code
+description: "Software development — security-focused review configuration"
+
+concepts:
+  implementation: "code changes"
+  tests: "automated tests"
+  files_changed: "files changed"
+  test_coverage: "test coverage %"
+  code_review: "security review"
+  build: "build/compile"
+  deploy: "deploy"
+  refactor: "security hardening"
+  bug: "vulnerability"
+  feature: "feature"
+  PR: "pull request"
+
+metrics:
+  - files_changed
+  - lines_added
+  - lines_removed
+  - tests_added
+  - tests_passing
+  - coverage_delta
+  - critical_findings      # Security-specific metrics
+  - warning_findings
+  - trickster_exploits     # Adversarial findings
+
+# Security-weighted review focus — guardian and trickster have expanded checklists
+review_focus:
+  guardian:
+    - injection_vulnerabilities    # SQL, NoSQL, command, LDAP
+    - authentication_bypass
+    - authorization_flaws          # IDOR, privilege escalation
+    - sensitive_data_exposure      # PII in logs, error messages
+    - security_misconfiguration
+    - dependency_vulnerabilities   # Known CVEs
+    - breaking_changes
+    - error_handling               # Information leakage on errors
+    - input_validation
+    - output_encoding
+  sage:
+    - code_quality
+    - test_coverage
+    - error_handling_completeness
+    - logging_hygiene              # No sensitive data in logs
+    - pattern_consistency
+    - documentation
+  skeptic:
+    - design_assumptions
+    - trust_boundaries             # Are they in the right place?
+    - alternative_approaches       # Simpler = less attack surface
+    - edge_cases
+    - scalability_under_attack     # DoS resilience
+  trickster:
+    - malformed_input              # Fuzzing mindset
+    - concurrency_races            # TOCTOU, double-spend
+    - error_path_exploitation      # What leaks on failure?
+    - dependency_failures          # What happens when deps are down?
+    - abuse_scenarios              # Malicious authenticated user
+    - supply_chain_vectors         # Dependency confusion, typosquatting
+
+context:
+  always:
+    - "README.md"
+    - ".archeflow/config.yaml"
+  plan_phase:
+    - "architecture docs"
+    - "threat model if available"
+    - "relevant source files (Explorer identifies)"
+  do_phase:
+    - "review findings to fix"
+    - "security checklist from Creator"
+  check_phase:
+    - "git diff (or full files for initial review)"
+    - "attack surface map from Explorer"
+    - "security checklist from Creator"
+
+# Guardian gets sonnet for deeper security analysis
+model_overrides:
+  guardian: sonnet

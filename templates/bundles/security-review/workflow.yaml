@@ -1,0 +1,81 @@
+# Workflow: Security Review
+# Thorough PDCA for security-focused code review. 3 cycles with full reviewer roster.
+# Cycle 1: initial review with all reviewers. Cycle 2-3: fix and re-review.
+
+name: security-review
+description: "Security-focused review — 3 cycles, full reviewer team with Trickster"
+team: security-review
+
+phases:
+  plan:
+    archetypes: [explorer, creator]
+    parallel: false
+    description: |
+      1. explorer: Map the attack surface. Identify:
+         - Data flows (user input -> processing -> storage -> output)
+         - Authentication and authorization boundaries
+         - External dependencies and their trust levels
+         - Sensitive data handling (PII, credentials, tokens)
+         - Public-facing entry points
+         Target paths: ${target_paths} (empty = analyze full diff/codebase)
+      2. creator: Based on Explorer's map, create a security review checklist:
+         - OWASP Top 10 applicability
+         - Threat model alignment (${threat_model} if available)
+         - Priority areas for each reviewer
+         - Known risk areas flagged for Trickster
+    inputs:
+      - "Code diff or target paths for review"
+      - "Threat model (${threat_model}) if available"
+      - "Architecture docs / README"
+
+  do:
+    archetypes: [maker]
+    parallel: false
+    description: |
+      Cycle 1: No implementation — this phase passes through to Check.
+      Cycle 2+: Apply security fixes identified in Check phase.
+      Each fix must:
+        - Address one specific finding
+        - Include a test that proves the vulnerability is fixed
+        - Not introduce new attack surface
+    inputs:
+      - "Review findings from Check phase"
+      - "Creator's security checklist"
+
+  check:
+    archetypes: [guardian, sage, skeptic, trickster]
+    parallel: false  # Guardian first, then others (but A2 fast-path disabled for thorough)
+    description: |
+      guardian (first): Security vulnerabilities, injection, auth bypass, SSRF, path traversal,
+        dependency vulnerabilities, breaking changes. This is the primary security gate.
+
+      sage: Code quality issues that create security risk — error handling gaps, logging
+        of sensitive data, inconsistent validation, missing type checks.
+
+      skeptic: Design-level concerns — are the security assumptions valid? Are there
+        simpler/safer approaches? What edge cases does the design miss?
+
+      trickster (adversarial): Actively tries to break the code:
+        - Malformed/oversized/unicode input
+        - Race conditions and TOCTOU
+        - Error path exploitation (what leaks on failure?)
+        - Dependency confusion / supply chain vectors
+        - Abuse scenarios (what can a malicious authenticated user do?)
+    inputs:
+      - "Code under review (diff or full files)"
+      - "Explorer's attack surface map"
+      - "Creator's security checklist"
+
+  act:
+    exit_when: all_approved
+    max_cycles: ${max_cycles}
+    on_reject: |
+      CRITICAL findings from any reviewer: must be fixed before next cycle.
+      WARNING findings: should be fixed, can be deferred with justification.
+      INFO findings: document and track, fix if time allows.
+      Trickster findings get priority — they represent actual exploit paths.
+
+hooks:
+  pre_plan: []
+  post_check: []
+  post_act: []

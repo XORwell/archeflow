@@ -1,0 +1,18 @@
+# Merge this `models:` block into your project's .archeflow/config.yaml to run role turns on
+# local Ollama models instead of the Claude API.
+#
+# Requires: Ollama running (`ollama serve`) and the tags below pulled (`ollama pull qwen3:8b`, ...).
+# Check: <archeflow-root>/lib/archeflow-ollama.sh health
+# Each turn: archeflow-ollama.sh chat <tag> --system-file agents/<role>.md  (user prompt on stdin)
+#
+# Only loopback hosts are contacted unless ARCHEFLOW_OLLAMA_ALLOW_REMOTE=1 is set.
+# Env overrides: ARCHEFLOW_OLLAMA_BASE_URL (wins), or OLLAMA_HOST.
+
+models:
+  provider: ollama
+  ollama:
+    base_url: "http://127.0.0.1:11434"
+  mapping:              # logical model -> Ollama tag
+    haiku: "qwen3:8b"
+    sonnet: "qwen3:14b"
+    opus: "qwen3:14b"

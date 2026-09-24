@@ -1,0 +1,43 @@
+name: cascade
+description: Each agent only runs if the previous one found issues — stop early when clean
+version: "1.0"
+shape: cascade
+
+# The cascade pattern runs agents in sequence. After each agent completes,
+# check its findings. If clean (0 CRITICAL, 0 WARNING), stop — don't spawn the rest.
+#
+# This formalizes what ArcheFlow already does implicitly with Guardian + A2 fast-path,
+# but makes it configurable for any phase and any sequence of agents.
+
+config:
+  # Sequence order — agents run in this order, each conditional on prior findings
+  # Override in .archeflow/config.yaml under patterns.check.sequence
+  sequence: []  # filled from workflow's archetype list for the phase
+
+  # When to stop spawning the next agent
+  stop_when:
+    critical: 0       # stop if CRITICAL count <= this
+    warning: 0         # AND WARNING count <= this
+    # Both conditions must be true to stop. Default: stop when fully clean.
+
+  # Override: never stop early on these conditions
+  never_skip:
+    - first_cycle_of_thorough   # always run all reviewers on first thorough cycle
+    - escalated_workflow         # if fast escalated to standard, run all
+
+  # Artifact naming follows standard convention: {phase}-{archetype}.md
+
+# Example: cascade in Check phase
+#
+# .archeflow/config.yaml:
+#   patterns:
+#     check:
+#       type: cascade
+#       sequence: [guardian, skeptic, sage, trickster]
+#       stop_when:
+#         critical: 0
+#         warning: 1   # tolerate 1 warning before stopping
+#
+# Guardian runs first. If clean → done. If findings → Skeptic runs.
+# Skeptic clean → done. Skeptic has findings → Sage runs. And so on.
+# Saves cost on clean implementations while preserving depth for messy ones.

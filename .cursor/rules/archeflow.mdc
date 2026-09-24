@@ -1,0 +1,37 @@
+---
+description: ArcheFlow role-based Plan/Do/Check/Act workflows. Use when the user invokes /archeflow-run, /archeflow-review or /archeflow-sprint, or asks for an ArcheFlow run, review or sprint.
+globs:
+alwaysApply: false
+---
+
+# ArcheFlow in Cursor
+
+ArcheFlow is a set of skills (Markdown instructions) plus Bash helpers in `lib/`. In Cursor
+the core skills are loaded through three adapters in `.cursor/skills/`:
+
+| Command | Adapter | Core skill |
+|---------|---------|------------|
+| `/archeflow-review` | `.cursor/skills/archeflow-review/` | `skills/review/SKILL.md` |
+| `/archeflow-run <task>` | `.cursor/skills/archeflow-run/` | `skills/run/SKILL.md` |
+| `/archeflow-sprint` | `.cursor/skills/archeflow-sprint/` | `skills/sprint/SKILL.md` |
+
+For the other functions, read the core skill and follow it: `skills/init/`, `skills/status/`,
+`skills/report/`, `skills/dag/`, `skills/replay/`, `skills/score/`, `skills/memory/`,
+`skills/scan/` (the Claude Code names are `/archeflow:<name>`).
+
+## Agents
+
+Where a skill spawns `archeflow:<role>`, use
+`Task(subagent_type="generalPurpose", prompt="<full text of agents/<role>.md>\n\n---\n\n<prompt>")`.
+Spawn parallel reviewers as several `Task` calls in one message. Give each agent only the
+inputs the skill lists for its role.
+
+## Scripts
+
+Call `lib/archeflow-*.sh` with the Shell tool from the project root, using the absolute path of
+the ArcheFlow checkout. They need Bash 4+, jq 1.6+ and git. Never paste task text or agent
+output into a shell command; write it to a file first, as the skills describe.
+
+## Skip ArcheFlow
+
+For single-line fixes, questions, reading code, config tweaks and plain git operations.

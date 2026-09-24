@@ -1,0 +1,82 @@
+# ArcheFlow Configuration
+# Copy to your project's .archeflow/config.yaml and customize
+
+version: "0.9.0"
+
+# Strategy — execution shape: pdca (cyclic), pipeline (linear), auto (task-based selection)
+strategy: auto
+
+# Budget
+costs:
+  budget_usd: 10.00
+  per_agent_usd: 2.00
+  warn_at_percent: 80
+
+# Git integration
+git:
+  enabled: true
+  branch_prefix: "archeflow/"
+  merge_strategy: squash
+  auto_push: false
+
+# Domain (auto-detected if omitted)
+# domain: code | writing | research
+
+# Memory
+memory:
+  enabled: true
+  inject_threshold: 2  # min frequency to inject
+  max_lessons: 10
+  decay_after_runs: 10
+
+# Models — default and per-archetype/per-workflow model selection.
+# ArcheFlow reads this to assign models to agents. The default applies unless overridden.
+models:
+  default: sonnet
+  # Per-archetype overrides (uncomment to customize):
+  # archetypes:
+  #   explorer: haiku         # Cheap model for research/exploration
+  #   creator: sonnet         # Creative tasks need stronger model
+  #   maker: sonnet           # Implementation needs full capability
+  #   guardian: sonnet        # Security review — don't skimp
+  #   skeptic: haiku          # Assumption checking is analytical
+  #   sage: haiku             # Quality review can use cheaper model
+  #   trickster: sonnet       # Adversarial testing benefits from stronger model
+  # Per-workflow overrides (uncomment to customize):
+  # workflows:
+  #   fast:
+  #     default: haiku        # Fast workflow uses cheaper models by default
+  #     archetypes:
+  #       guardian: sonnet     # Except Guardian — always needs strong model
+  #   standard:
+  #     default: sonnet
+  #   thorough:
+  #     default: sonnet
+
+# Progress
+progress:
+  enabled: true
+  file: .archeflow/progress.md
+
+# Hooks — commands to run at orchestration lifecycle events.
+# Uncomment and customize as needed.
+#
+# hooks:
+#   run-start:
+#     command: "echo 'ArcheFlow run starting'"
+#     fail_action: warn        # warn | abort
+#   phase-complete:
+#     command: "./scripts/on-phase-complete.sh"
+#     fail_action: warn
+#   agent-complete:
+#     command: "./scripts/on-agent-complete.sh"
+#     fail_action: warn
+#   pre-merge:
+#     command: "./scripts/pre-merge-checks.sh"
+#     fail_action: abort       # abort recommended — blocks bad merges
+#   post-merge:
+#     command: "./scripts/post-merge-notify.sh"
+#     fail_action: warn
+#   run-complete:
+#     command: "./scripts/on-run-complete.sh"
+#     fail_action: warn

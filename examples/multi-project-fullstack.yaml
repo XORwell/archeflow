@@ -1,0 +1,50 @@
+# Example: multi-project run definition (read by the multi-project skill)
+#
+# A shared package is built first (layer 0), then backend and frontend use it
+# in parallel (layer 1). Each entry becomes its own PDCA run; depends_on
+# makes sure the shared types exist before the dependent packages start.
+#
+# Use: save as .archeflow/multi-run.yaml (or pass the file with --config) and
+# ask in plain words, e.g. "run the multi-run in .archeflow/multi-run.yaml"; there is no
+# separate command. `path` is relative to the directory you start in.
+# The multi-project skill documents the fields.
+
+name: user-auth
+description: "Add user authentication across the stack"
+
+projects:
+  - id: shared
+    path: "packages/shared"
+    task: >
+      Add TypeScript auth types (User, Session, AuthToken, LoginRequest,
+      RegisterRequest) and JWT utility functions (sign, verify, decode)
+      with full test coverage. Export from package index.
+    workflow: fast
+    domain: code
+    depends_on: []
+
+  - id: backend
+    path: "packages/api"
+    task: >
+      Add auth middleware (JWT verification, role extraction), login and
+      register endpoints with bcrypt password hashing, refresh token
+      rotation, and integration tests against an in-memory DB.
+    workflow: standard
+    domain: code
+    depends_on: [shared]
+
+  - id: frontend
+    path: "packages/web"
+    task: >
+      Add login and register pages, an AuthContext provider with token
+      refresh, a ProtectedRoute wrapper, and Playwright e2e tests for
+      the login flow.
+    workflow: standard
+    domain: code
+    depends_on: [shared]
+
+budget:
+  total_usd: 10.00
+  per_project_usd: 5.00
+
+parallel: true

@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in ArcheFlow does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. /af-run "..."
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of `bash --version | head -1; jq --version; git --version`, the host (Claude Code or Cursor) and its version, and your OS.
+    validations:
+      required: true
+  - type: textarea
+    id: events
+    attributes:
+      label: Relevant events / logs
+      description: Excerpt from `.archeflow/events/*.jsonl` or script output. Remove anything private.
+      render: text

@@ -1,0 +1,21 @@
+name: parallel-merge
+description: All agents run simultaneously, outputs merged by dedup and severity rules
+version: "1.0"
+shape: parallel-merge
+
+# The default pattern for Check phase (after Guardian-first rule).
+# All remaining reviewers spawn in parallel. Their findings are collected,
+# deduplicated (same file + category = merge, keep higher severity),
+# and consolidated into a single verdict.
+
+config:
+  # Dedup rules for merging parallel outputs
+  dedup:
+    match_on: [file, category]         # what makes two findings "the same"
+    severity_rule: higher_wins         # on match, keep the higher severity
+    route_rule: higher_priority_dest   # on match, route to Creator over Maker
+
+  # Verdict rules
+  verdict:
+    rejected_when: "any CRITICAL"      # after dedup
+    approved_when: "no CRITICAL"

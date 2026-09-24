@@ -1,0 +1,61 @@
+name: debate
+description: Two agents argue opposing positions, a third synthesizes the best approach
+version: "1.0"
+shape: debate
+
+# The debate pattern spawns three agents:
+#   1. advocate — argues FOR one perspective (spawned first, in parallel with critic)
+#   2. critic  — argues AGAINST or for an alternative (spawned in parallel with advocate)
+#   3. judge   — reads both, synthesizes the best approach (spawned after both complete)
+#
+# The judge's output becomes the phase artifact (replacing what a single agent would produce).
+
+config:
+  # Role briefs are appended to the archetype's base personality.
+  # Override these in .archeflow/config.yaml under patterns.plan.roles
+  roles:
+    advocate:
+      brief: "Argue for the simplest, most direct solution. Minimize abstraction, new files, and future-proofing. Ship fast."
+      # Which archetype fills this role (overridable per project)
+      default_archetype: creator
+    critic:
+      brief: "Argue for the most robust solution. Consider edge cases, scaling, maintainability. Protect the future."
+      default_archetype: creator
+    judge:
+      brief: "You received two competing proposals. Evaluate both on: correctness, simplicity, robustness, and effort. Synthesize the best approach — steal freely from both. Output a single unified proposal."
+      default_archetype: sage
+
+  # Spawn rules
+  parallel: [advocate, critic]   # these run at the same time
+  then: [judge]                  # this runs after parallel agents complete
+
+  # What the judge receives
+  judge_context:
+    - advocate_output
+    - critic_output
+    - original_task
+
+  # Artifact naming
+  artifacts:
+    advocate: "{phase}-debate-advocate.md"
+    critic: "{phase}-debate-critic.md"
+    judge: "{phase}-debate-judge.md"    # this is the canonical phase output
+
+# Example: using debate for Plan phase
+#
+# .archeflow/config.yaml:
+#   patterns:
+#     plan:
+#       type: debate
+#       roles:
+#         advocate:
+#           brief: "Design for a solo developer maintaining this for 5 years"
+#           archetype: creator
+#         critic:
+#           brief: "Design for a team of 10 with strict compliance requirements"
+#           archetype: creator
+#         judge:
+#           archetype: sage
+#
+# The two Creators produce competing proposals. Sage picks the winner.
+# This directly counters Over-Architect shadow by forcing a minimalist voice.

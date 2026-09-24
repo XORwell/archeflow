@@ -1,0 +1,63 @@
+# Workflow: Backend Feature
+# Standard PDCA for backend feature implementation.
+# 2 cycles: first pass implements, second pass addresses review findings.
+
+name: backend-feature
+description: "Backend feature — scope, design, implement, review (2 cycles)"
+team: backend-feature
+
+phases:
+  plan:
+    archetypes: [explorer, creator]
+    parallel: false
+    description: |
+      1. explorer: Map affected codebase areas. Identify existing patterns, relevant
+         tests, DB schema, API routes, and dependencies. Flag risks.
+      2. creator: Design the implementation approach. Define:
+         - API contract (endpoints, request/response shapes)
+         - DB migration (if needed)
+         - Test strategy (unit, integration, edge cases)
+         - Confidence table for each axis (understanding, completeness, risk)
+    inputs:
+      - "Feature description / ticket"
+      - "Relevant source files (Explorer identifies)"
+      - "Existing tests for affected area"
+
+  do:
+    archetypes: [maker]
+    parallel: false
+    description: |
+      Implement the feature following Creator's design.
+      Order: DB migration -> models -> business logic -> API endpoint -> tests.
+      Commit after each logical unit. Run tests before moving to next unit.
+      Run lint (${lint_command}) and the project tests (`test_command` in .archeflow/config.yaml) before marking complete.
+    inputs:
+      - "Creator's design proposal"
+      - "Test fixtures and helpers"
+      - "Existing code patterns (from Explorer)"
+
+  check:
+    archetypes: [guardian, sage]
+    parallel: true
+    description: |
+      guardian: Security vulnerabilities, breaking changes, dependency risks, error handling.
+               Pay special attention to input validation, auth checks, and SQL injection.
+      sage: Code quality, test coverage, documentation, pattern consistency.
+            Verify tests actually test the right things (not just passing).
+    inputs:
+      - "git diff from Maker"
+      - "Creator's proposal (risk section)"
+      - "Existing test baseline"
+
+  act:
+    exit_when: all_approved
+    max_cycles: ${max_cycles}
+    on_reject: |
+      Guardian findings: fix in Maker (security/breaking changes are blocking).
+      Sage findings: fix in Maker (quality issues, missing tests).
+      Re-run affected tests after each fix.
+
+hooks:
+  pre_plan: []
+  post_check: []
+  post_act: []

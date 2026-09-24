@@ -1,0 +1,29 @@
+{
+  "name": "archeflow",
+  "owner": {
+    "name": "Christian Nennemann",
+    "url": "https://github.com/XORwell"
+  },
+  "metadata": {
+    "description": "ArcheFlow plugin marketplace"
+  },
+  "plugins": [
+    {
+      "name": "archeflow",
+      "source": "./",
+      "description": "Role-based Plan/Do/Check/Act workflows: Maker in its own git worktree, reviewer roles, rule-based checks on agent output, JSONL event log.",
+      "version": "0.11.0",
+      "license": "MIT",
+      "keywords": [
+        "orchestration",
+        "multi-agent",
+        "archetypes",
+        "pdca",
+        "code-review",
+        "quality",
+        "worktrees",
+        "shadow-detection"
+      ]
+    }
+  ]
+}

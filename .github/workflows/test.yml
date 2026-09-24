@@ -1,0 +1,58 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bats:
+    name: Bash libs (bats)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bats jq shellcheck
+
+      - name: Syntax check shell scripts
+        run: |
+          status=0
+          for f in lib/*.sh scripts/*.sh; do
+            bash -n "$f" || { echo "::error file=$f::bash syntax error"; status=1; }
+          done
+          exit "$status"
+
+      - name: ShellCheck (errors only)
+        run: shellcheck --severity=error lib/*.sh scripts/*.sh
+
+      - name: Run bats tests
+        run: ./scripts/run-tests.sh
+
+  plugin:
+    name: Plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate JSON manifests
+        run: |
+          for f in .claude-plugin/*.json hooks/hooks.json; do
+            jq empty "$f" || { echo "::error file=$f::invalid JSON"; exit 1; }
+          done
+      - name: Versions agree (CHANGELOG, plugin.json, marketplace.json)
+        run: |
+          changelog=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '#[] ')
+          plugin=$(jq -r .version .claude-plugin/plugin.json)
+          market=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+          echo "changelog=$changelog plugin=$plugin marketplace=$market"
+          [ "$changelog" = "$plugin" ] && [ "$plugin" = "$market" ]

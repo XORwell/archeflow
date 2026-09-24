@@ -1,0 +1,51 @@
+# Domain: Code
+# Standard code domain for quick fixes. Identical to the default code domain.
+# Included for bundle completeness — all bundles ship their own domain config.
+
+name: code
+description: "Software development — bug fixes and patches"
+
+concepts:
+  implementation: "code changes"
+  tests: "automated tests"
+  files_changed: "files changed"
+  test_coverage: "test coverage %"
+  code_review: "code review"
+  build: "build/compile"
+  deploy: "deploy"
+  refactor: "refactor"
+  bug: "bug"
+  feature: "feature"
+  PR: "pull request"
+
+metrics:
+  - files_changed
+  - lines_added
+  - lines_removed
+  - tests_added
+  - tests_passing
+  - coverage_delta
+
+review_focus:
+  guardian:
+    - regression_risk
+    - security_vulnerabilities
+    - breaking_changes
+    - error_handling
+
+context:
+  always:
+    - "README.md"
+    - ".archeflow/config.yaml"
+  plan_phase:
+    - "bug report / description"
+    - "relevant source files"
+    - "existing tests for affected area"
+  do_phase:
+    - "Creator's fix proposal"
+  check_phase:
+    - "git diff from Maker"
+    - "fix proposal risk section"
+
+# All haiku — quick fixes don't need expensive models
+model_overrides: {}

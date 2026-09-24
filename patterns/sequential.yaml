@@ -1,0 +1,13 @@
+name: sequential
+description: Agents run one after another, each seeing the prior agent's output
+version: "1.0"
+shape: sequential
+
+# The default pattern for Plan phase. Agent A produces output,
+# Agent B receives A's output as input, Agent C receives A+B, etc.
+# Order is determined by the workflow's archetype list for the phase.
+
+config:
+  # Each agent's output is saved as an artifact and injected into the next agent's context.
+  # Attention filters still apply — agents don't see everything, only what's relevant.
+  pass_forward: true  # each agent sees prior agent's output (true by default)

@@ -1,0 +1,27 @@
+# Runtime state (created per-project, not part of plugin)
+.archeflow/*
+!.archeflow/config.yaml
+!.archeflow/langfuse.env.example
+
+# Generated interop directories
+.gnap/
+
+# Internal dev notes
+docs/internal/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Editor
+*.swp
+*~
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+

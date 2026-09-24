@@ -1,0 +1,19 @@
+# Bundle: security-review
+# Thorough security-focused code review with all reviewers including Trickster.
+# 3 PDCA cycles for maximum coverage. Higher budget to account for deeper analysis.
+
+name: security-review
+description: "Security-focused code review — full team with Trickster, 3 thorough cycles"
+version: "1.0.0"
+domain: code
+includes:
+  team: team.yaml
+  workflow: workflow.yaml
+  domain: domain.yaml
+  config: config.yaml
+  archetypes: []
+requires: []
+variables:
+  max_cycles: 3            # Thorough: 3 cycles for deep security coverage
+  target_paths: ""         # Specific paths to review (empty = entire diff)
+  threat_model: ""         # Path to threat model doc if available

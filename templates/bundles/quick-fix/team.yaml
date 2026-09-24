@@ -1,0 +1,30 @@
+# Team: Quick Fix
+# Minimal team for small bug fixes. No Explorer (scope is known),
+# no Sage (quality review is overkill for a patch). Creator designs the fix,
+# Maker applies it, Guardian sanity-checks for regressions.
+
+name: quick-fix
+description: "Minimal team for small fixes: design, implement, sanity-check"
+domain: code
+
+# Plan: creator only — scope is already known for a bug fix.
+#        Creator identifies root cause and designs the fix.
+plan: [creator]
+
+# Do: maker applies the fix and runs tests.
+do: [maker]
+
+# Check: guardian only — checks for regressions, security issues, breaking changes.
+#         No Sage/Skeptic/Trickster — keep overhead minimal.
+check: [guardian]
+
+exit: all_approved
+max_cycles: ${max_cycles}
+
+# Notes:
+# - If Guardian finds 2+ CRITICALs, orchestration rule A1 escalates to standard
+#   workflow automatically (adds Sage + Skeptic for next cycle)
+# - For truly trivial fixes (typo, config change), even this may be overkill —
+#   but it ensures at least one review pass happens
+# - If the fix turns out to be more complex than expected, abort and use
+#   backend-feature bundle instead

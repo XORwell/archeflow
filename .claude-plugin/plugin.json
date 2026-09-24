@@ -1,0 +1,24 @@
+{
+  "name": "archeflow",
+  "description": "Role-based Plan/Do/Check/Act workflows for Claude Code and Cursor: a Maker in its own git worktree, up to four reviewer roles, rule-based checks on agent output, JSONL event log. Commands: /archeflow:review, /archeflow:run, /archeflow:init, /archeflow:sprint and more.",
+  "version": "0.11.0",
+  "author": {
+    "name": "Christian Nennemann",
+    "url": "https://github.com/XORwell"
+  },
+  "homepage": "https://github.com/XORwell/archeflow",
+  "repository": "https://github.com/XORwell/archeflow",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "multi-agent",
+    "archetypes",
+    "pdca",
+    "code-review",
+    "quality",
+    "worktrees",
+    "shadow-detection",
+    "workflows",
+    "claude-code-plugin"
+  ]
+}

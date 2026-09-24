@@ -1,0 +1,32 @@
+# Team: Security Review
+# Full team with Trickster for adversarial testing. All five reviewer archetypes
+# participate in Check phase for maximum security coverage.
+# Use for: auth changes, public API, payment flows, data handling, dependencies.
+
+name: security-review
+description: "Security-focused review: full team with adversarial Trickster"
+domain: code
+
+# Plan: explorer maps attack surface and data flows,
+#        creator identifies security requirements and risk areas.
+plan: [explorer, creator]
+
+# Do: maker is not used — this is a review workflow, not implementation.
+#     If fixes are needed, maker applies them in cycle 2+.
+do: [maker]
+
+# Check: all five reviewers for thorough coverage.
+#   guardian — security vulnerabilities, auth, injection, breaking changes
+#   sage — code quality, pattern consistency, error handling completeness
+#   skeptic — design assumptions, alternative approaches, edge cases
+#   trickster — adversarial testing: malformed input, race conditions, abuse paths
+check: [guardian, sage, skeptic, trickster]
+
+exit: all_approved
+max_cycles: ${max_cycles}
+
+# Notes:
+# - Trickster is the key differentiator: actively tries to break the code
+# - Guardian fast-path (A2) is disabled for thorough workflows on first cycle
+# - Trickster is mandatory on first pass per orchestration rules
+# - If reviewing existing code (not new changes), Explorer scopes the review area

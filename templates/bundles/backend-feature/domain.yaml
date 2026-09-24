@@ -1,0 +1,66 @@
+# Domain: Code
+# Standard code domain — software development with ArcheFlow defaults.
+# No concept remapping needed (code is the default domain).
+
+name: code
+description: "Software development — applications, libraries, infrastructure"
+
+concepts:
+  implementation: "code changes"
+  tests: "automated tests"
+  files_changed: "files changed"
+  test_coverage: "test coverage %"
+  code_review: "code review"
+  build: "build/compile"
+  deploy: "deploy"
+  refactor: "refactor"
+  bug: "bug"
+  feature: "feature"
+  PR: "pull request"
+
+metrics:
+  - files_changed
+  - lines_added
+  - lines_removed
+  - tests_added
+  - tests_passing
+  - coverage_delta
+
+review_focus:
+  guardian:
+    - security_vulnerabilities
+    - breaking_changes
+    - dependency_risks
+    - error_handling
+  sage:
+    - code_quality
+    - test_coverage
+    - documentation
+    - pattern_consistency
+  skeptic:
+    - design_assumptions
+    - scalability
+    - alternative_approaches
+    - edge_cases
+  trickster:
+    - malformed_input
+    - concurrency_races
+    - error_path_exploitation
+    - dependency_failures
+
+context:
+  always:
+    - "README.md"
+    - ".archeflow/config.yaml"
+  plan_phase:
+    - "relevant source files (Explorer identifies)"
+    - "existing tests for affected area"
+  do_phase:
+    - "Creator's proposal"
+    - "test fixtures and helpers"
+  check_phase:
+    - "git diff from Maker"
+    - "proposal risk section"
+
+# Code domain uses default archetype model assignments
+model_overrides: {}
