@@ -7,6 +7,7 @@ setup() {
   load test_helper
   _common_setup
   export HOME="$BATS_TEST_TMPDIR/home"
+  unset XDG_CONFIG_HOME  # hermetic: CI runners set it, which would bypass $HOME/.config
   mkdir -p "$HOME" .archeflow "$BATS_TEST_TMPDIR/bin"
   export CURL_LOG="$BATS_TEST_TMPDIR/curl.argv"
   export CURL_HDR="$BATS_TEST_TMPDIR/curl.headers"
