@@ -119,3 +119,12 @@ Environment and endpoints:
   lacked evidence stays visible.
 
 Out of scope: vulnerabilities in Claude Code, Cursor, or the LLM providers themselves.
+
+### Limits of these checks
+
+The checks above treat repository **content** as untrusted: files, configs, event logs, diffs.
+They do not contain an agent that can run arbitrary shell commands. The Maker (and any agent you
+allow to use Bash) runs with your session's permissions and could, for example, rewrite the run
+records under `.archeflow/runs/<run_id>/` or files outside the project. ArcheFlow cannot prevent
+that; your Claude Code permission mode and sandboxing can. Run untrusted tasks or repositories in
+a sandbox or with a permission mode that asks before shell commands.

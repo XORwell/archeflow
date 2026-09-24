@@ -32,12 +32,23 @@ teardown() {
 @test "rollback: exits 2 when no test command available" {
   run "$LIB_DIR/archeflow-rollback.sh" test-run
   [ "$status" -eq 2 ]
-  [[ "$output" == *"No test command"* ]]
+  [[ "$output" == *"o test command"* ]]
+}
+
+@test "rollback: refuses to run a config test_command that was not recorded at run start" {
+  mkdir -p .archeflow
+  echo 'test_command: "touch should-not-run"' > .archeflow/config.yaml
+  run "$LIB_DIR/archeflow-rollback.sh" test-run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no test command recorded"* ]]
+  [ ! -e should-not-run ]
 }
 
 @test "rollback: reads test_command from config.yaml" {
   mkdir -p .archeflow
   echo 'test_command: "echo ok"' > .archeflow/config.yaml
+  mkdir -p .archeflow/runs/test-run
+  printf 'echo ok' > .archeflow/runs/test-run/test-command   # as archeflow-git.sh init records it
   # HEAD is not an ArcheFlow merge: tests still run (auto-revert is disabled)
   run "$LIB_DIR/archeflow-rollback.sh" test-run
   # It should pick up the command and try to run it (test should pass -> exit 0)

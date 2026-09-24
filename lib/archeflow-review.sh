@@ -142,10 +142,10 @@ get_diff() {
   case "$MODE" in
     uncommitted)
       # Combine staged and unstaged changes against HEAD
-      diff_text=$(git diff HEAD 2>/dev/null || true)
+      diff_text=$(git diff --text --no-textconv --no-ext-diff HEAD 2>/dev/null || true)
       if [[ -z "$diff_text" ]]; then
         # Maybe everything is staged, try just staged
-        diff_text=$(git diff --cached 2>/dev/null || true)
+        diff_text=$(git diff --text --no-textconv --no-ext-diff --cached 2>/dev/null || true)
       fi
       # New files are the common case for a feature: add untracked, non-ignored
       # files as new-file diffs. ArcheFlow's own state (.archeflow/, e.g. the
@@ -155,7 +155,7 @@ get_diff() {
         [[ "$f" == .archeflow/* ]] && continue
         [[ -f "$f" && ! -L "$f" ]] || continue
         # exit 1 = "files differ", the expected result against /dev/null
-        d=$(git diff --no-index -- /dev/null "$f" 2>/dev/null || true)
+        d=$(git diff --text --no-textconv --no-ext-diff --no-index -- /dev/null "$f" 2>/dev/null || true)
         [[ -n "$d" ]] && untracked_diff+="${d}"$'\n'
       done < <(git ls-files -z --others --exclude-standard 2>/dev/null)
       if [[ -n "$untracked_diff" ]]; then
@@ -177,14 +177,14 @@ get_diff() {
       if ! git rev-parse --verify --quiet --end-of-options "${BASE_BRANCH}^{commit}" &>/dev/null; then
         die "Base branch '${BASE_BRANCH}' not found. Pass --base <branch>."
       fi
-      diff_text=$(git diff --end-of-options "${BASE_BRANCH}...${TARGET}" 2>/dev/null || true)
+      diff_text=$(git diff --text --no-textconv --no-ext-diff --end-of-options "${BASE_BRANCH}...${TARGET}" 2>/dev/null || true)
       ;;
     commit)
       # Validate commit range resolves
       if ! git rev-parse --end-of-options "${TARGET}" &>/dev/null; then
         die "Invalid commit range: '${TARGET}'"
       fi
-      diff_text=$(git diff --end-of-options "${TARGET}" 2>/dev/null || true)
+      diff_text=$(git diff --text --no-textconv --no-ext-diff --end-of-options "${TARGET}" 2>/dev/null || true)
       ;;
   esac
 

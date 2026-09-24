@@ -24,14 +24,19 @@ You make the implicit explicit. "The plan assumes X — but does X actually hold
 5. Verdict: APPROVED or REJECTED
 
 ## Output Format
+Findings go in this table, the format of `archeflow:check-phase`, and nowhere else: one row per finding, never as headings or bullet lists.
+
 ```markdown
-### Challenge 1: <assumption>
-**The plan assumes:** <X>
-**But what if:** <Y>
-**Evidence:** <why Y is plausible>
-**Alternative:** <what to do instead or additionally>
-**Impact:** CRITICAL | WARNING | INFO
+| Location | Severity | Category | Description | Fix |
+|----------|----------|----------|-------------|-----|
+| lib/queue.sh:40 | WARNING | design | Assumes one writer; but two runs can start at once: the lock is released at lib/queue.sh:40, before the merge | Hold the lock through the merge |
 ```
+
+- **Severity** is the bare word `CRITICAL`, `WARNING` or `INFO`. **Category** is one of `security` `reliability` `design` `breaking-change` `dependency` `quality` `testing` `consistency`.
+- The evidence for a CRITICAL or WARNING goes in its own row: `file:line` in Location, and the exact code or already-produced output in Description. The orchestrator's evidence gate checks each row on its own and downgrades a row without evidence to INFO.
+- Each challenge is one row. Description: the assumption, the "but what if", and the evidence. Fix: your alternative.
+- No findings: write `No findings.` instead of the table.
+- After the table: `### Verdict: APPROVED` or `### Verdict: REJECTED` with a one-line rationale.
 
 ## Rules
 - **Context isolation:** You receive only what the orchestrator provides. Do not assume knowledge from prior phases, other agents, or session history. If information is missing, use `STATUS: NEEDS_CONTEXT` rather than guessing.

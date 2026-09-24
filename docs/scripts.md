@@ -31,8 +31,17 @@ an event a root. The event schema is in `skills/run/reference.md`.
 | Script | Purpose | Example |
 |--------|---------|---------|
 | `archeflow-shadow.sh` | Failure-mode checks on one agent's output (`detect`), system checks on a cycle (`check-system`) | `archeflow-shadow.sh detect maker do-maker.md --diff do-maker.diff` |
-| `archeflow-evidence.sh` | Check that CRITICAL/WARNING findings carry evidence | `archeflow-evidence.sh validate review.md` |
+| `archeflow-evidence.sh` | Check that CRITICAL/WARNING findings carry evidence; `validate` rewrites unevidenced ones to INFO | `archeflow-evidence.sh validate review.md` |
 | `archeflow-convergence.sh` | Convergence between cycles, oscillating findings, Wiggum Break (`wiggum-check` includes the oscillation check and logs a `wiggum.break` event) | `archeflow-convergence.sh wiggum-check <run_id>` |
+
+`archeflow-evidence.sh` reads findings as table rows with a Severity column (the format in
+`skills/check-phase/SKILL.md`), `**Severity:**`/`**Impact:**` lines, headings that start with the
+severity (`### 1. CRITICAL, Security: <title>`, to the next heading of the same level), and lines
+that start with it. It prints `Findings: N | Downgrades: M`. Exit codes: 0 = at least one finding
+downgraded, 1 = nothing to downgrade, 3 = the file contains CRITICAL/WARNING/INFO but no finding was
+parsed, so nothing was checked (warning on stderr). On 3 the orchestrator asks the reviewer to
+rewrite its findings in the table and runs the gate again; if that fails, it checks each
+CRITICAL/WARNING for evidence itself and treats the unevidenced ones as INFO.
 
 ## Git
 

@@ -23,6 +23,8 @@ Reviewers examine the Maker's implementation. This skill defines shared rules, f
 |----------|----------|----------|-------------|-----|
 | src/auth/handler.ts:48 | CRITICAL | security | Empty string bypasses validation | Add length check |
 
+Every reviewer (Guardian, Skeptic, Sage, Trickster) reports its findings in this table and only in this table: one row per finding, the severity as the bare word `CRITICAL`, `WARNING` or `INFO`, and the evidence for that finding in its own row (file:line in Location, the exact code or already-produced output in Description). The evidence gate checks each row on its own. Do not write findings as headings or bullet lists. With no findings, write `No findings.` instead of the table.
+
 **Severity:** CRITICAL = must fix, blocks approval. WARNING = should fix, doesn't block alone. INFO = nice to have, never blocks.
 
 **Categories:** `security` `reliability` `design` `breaking-change` `dependency` `quality` `testing` `consistency`
@@ -90,7 +92,9 @@ Each reviewer gets context per the attention filters above.
 
 ### Step 4: Collect and Consolidate
 
-For each reviewer: save to `.archeflow/artifacts/<run_id>/check-<archetype>.md`, emit `review.verdict` event, record sequence number.
+For each reviewer: save to `.archeflow/artifacts/<run_id>/check-<archetype>.md`, run the evidence gate on it, emit `review.verdict` event, record sequence number.
+
+**Evidence gate:** `<archeflow-root>/lib/archeflow-evidence.sh validate <file>`. Exit 0 = unevidenced CRITICAL/WARNING findings were rewritten to INFO in the file; exit 1 = nothing to downgrade. Exit 3 = the file contains CRITICAL/WARNING/INFO but no finding in a recognised format (table row with a Severity column, `**Severity:**`/`**Impact:**` line, severity heading, or a line starting with the severity), so nothing was checked: ask the reviewer once to rewrite its findings in the table above and run the gate again. If it still exits 3, do not take its CRITICAL/WARNING findings at face value: check each one for evidence yourself (file:line, code, output) and treat the ones without it as INFO, saying so in the report.
 
 **Deduplication:** If two reviewers raise the same issue (same file + same category), merge into one finding using the higher severity. Don't double-count.
 

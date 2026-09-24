@@ -78,7 +78,9 @@ Findings with the same file and category from two reviewers are merged (higher s
 Save each review to `.archeflow/review-<role>.md`, then
 `<archeflow-root>/lib/archeflow-evidence.sh validate .archeflow/review-<role>.md`. It downgrades
 CRITICAL/WARNING findings that hedge ("might be", "could potentially", ...) or cite no evidence to
-INFO. Report the downgraded counts.
+INFO. Report the downgraded counts. Exit 3 means it found severity words but no finding it could
+read: ask the reviewer to rewrite its findings in the table of `archeflow:check-phase` and run it
+again, or check the CRITICAL/WARNING findings for evidence yourself.
 
 ## Cost
 

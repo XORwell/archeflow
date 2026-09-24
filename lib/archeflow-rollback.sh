@@ -73,7 +73,9 @@ if [[ -z "$TEST_CMD" ]]; then
       exit 2
     fi
   else
-    TEST_CMD="$CURRENT"
+    echo "ERROR: no test command recorded for run ${RUN_ID} (${RECORDED} is missing)." >&2
+    echo "Refusing to run an unverified command; run your tests yourself or pass --test-cmd." >&2
+    exit 2
   fi
 fi
 

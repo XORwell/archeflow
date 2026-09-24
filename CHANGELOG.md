@@ -74,6 +74,10 @@ did not write, update.
 - `/archeflow:scan` never runs project code.
 - The evidence gate keeps `<file>.orig` before rewriting a review and logs each downgrade as an
   `evidence.downgrade` event.
+- Review diffs are generated with `--text --no-textconv --no-ext-diff`, so a `.gitattributes`
+  that marks code as binary (or sets a diff driver) cannot hide changes from reviewers.
+- A run without its start records (configuration fingerprint, recorded `test_command`) is refused
+  at merge and post-merge testing instead of being merged or tested with a warning.
 - `SECURITY.md` describes the attacker model (repository content is untrusted) and what the
   scripts do and do not guarantee. A fuzz test feeds injection payloads through every script
   that reads `.archeflow/` data.
@@ -92,6 +96,9 @@ did not write, update.
   references, repeated Skeptic concerns are counted correctly, the Guardian "Paranoid" and
   Wiggum Break thresholds are applied as documented, and the budget break reads
   `costs.budget_usd`.
+- The evidence gate also reads heading-style findings, and exits 3 when a review contains
+  severity words but no parseable findings (the run then asks the reviewer to reformat) instead
+  of silently passing; all reviewer agents share one findings-table output format.
 - The Maker failure-mode check reads the run diff (`detect maker --diff`, now required) and counts
   code files only; before, it could never fire in a real run, and on a diff it fired on any change.
 - Tunnel Vision no longer fires on clean or single-reviewer runs; Echo Chamber counts only the

@@ -422,7 +422,7 @@ cmd_integrate() {
   mkdir -p "$art"
   af_refuse_symlink "${art}/do-maker.diff" && af_refuse_symlink "${art}/do-maker-files.txt" \
     || die "Refusing to write the Maker diff through a symlink."
-  git diff "${base}...HEAD" -- . ":(exclude)${ARCHEFLOW_DIR}" > "${art}/do-maker.diff"
+  git diff --text --no-textconv --no-ext-diff "${base}...HEAD" -- . ":(exclude)${ARCHEFLOW_DIR}" > "${art}/do-maker.diff"
   git diff --name-only "${base}...HEAD" -- . ":(exclude)${ARCHEFLOW_DIR}" > "${art}/do-maker-files.txt"
 
   if [[ -n "$path" ]]; then
@@ -568,7 +568,7 @@ cmd_merge() {
       die "ArcheFlow configuration changed since the run started: $(tr '\n' ' ' <<<"$changed")-- refusing to merge. Review the change; if you made it, start a new run."
     fi
   else
-    info "Warning: no configuration fingerprint for run ${run_id} (started by an older version); not verified."
+    die "No configuration fingerprint for run ${run_id} (${fp_file} is missing). Refusing to merge an unverified run; start a new run with archeflow-git.sh init."
   fi
 
   local commit_msg="archeflow: merge run ${run_id}"

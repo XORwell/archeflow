@@ -221,6 +221,9 @@ other:
   test_command: "touch nested-should-not-run"
 test_command: 'echo "a b" > quoted.out'
 YAML
+  # init records the parsed command; rollback must accept it as equal to the config value
+  mkdir -p .archeflow/runs/r1
+  (source "$LIB_DIR/archeflow-common.sh"; af_config_test_command) > .archeflow/runs/r1/test-command
   run "$LIB_DIR/archeflow-rollback.sh" r1
   [ "$status" -eq 0 ]
   [ "$(cat quoted.out)" = "a b" ]
@@ -404,4 +407,37 @@ _frontmatter() { awk 'NR>1 && $0=="---"{exit} NR>1{print}' "$1"; }
   [ "$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")" = "644" ]
   jq -e 'select(.type == "evidence.downgrade") | .data.from == "CRITICAL" and .data.reason == "no_evidence" and .agent == "guardian"' \
     .archeflow/events/r1.jsonl
+}
+
+# --- Final review B1: .gitattributes must not hide code from reviewers -----------
+
+@test "final-B1: a Maker .gitattributes marking code as binary does not hide it in do-maker.diff" {
+  _tracked_config_repo
+  "$LIB_DIR/archeflow-git.sh" init r9 2>/dev/null
+  wt="$("$LIB_DIR/archeflow-git.sh" worktree r9 2>/dev/null)"
+  printf '*.py -diff\n*.sh binary\n' > "$wt/.gitattributes"
+  printf 'import os\nos.system("touch HIDDEN_PAYLOAD")\n' > "$wt/src/app.py"
+  git -C "$wt" add -A && git -C "$wt" commit -qm "feat: innocuous"
+  run "$LIB_DIR/archeflow-git.sh" integrate r9
+  [ "$status" -eq 0 ]
+  diff_file=".archeflow/artifacts/r9/do-maker.diff"
+  [ -f "$diff_file" ]
+  grep -q 'HIDDEN_PAYLOAD' "$diff_file"
+  ! grep -q '^Binary files' "$diff_file"
+}
+
+@test "final-B1: archeflow-review.sh shows code even when .gitattributes marks it binary" {
+  git checkout -q -b feat/x
+  printf '*.py -diff\n' > .gitattributes
+  mkdir -p src && printf 'os.system("touch HIDDEN_PAYLOAD")\n' > src/evil.py
+  git add -A && git commit -qm "feat: x"
+  run "$LIB_DIR/archeflow-review.sh" --branch feat/x --base main
+  [[ "$output" == *"HIDDEN_PAYLOAD"* ]]
+  [[ "$output" != *"Binary files"* ]]
+  # uncommitted and untracked paths as well
+  printf 'os.system("touch HIDDEN_TWO")\n' > src/new.py
+  printf 'os.system("touch HIDDEN_THREE")\n' >> src/evil.py
+  run "$LIB_DIR/archeflow-review.sh"
+  [[ "$output" == *"HIDDEN_TWO"* ]]
+  [[ "$output" == *"HIDDEN_THREE"* ]]
 }
