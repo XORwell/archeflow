@@ -44,12 +44,31 @@ teardown() {
   [ "$base" = "main" ]
 }
 
-@test "git init: fails if branch already exists" {
-  "$LIB_DIR/archeflow-git.sh" init test-run 2>/dev/null
-  git checkout main --quiet
+@test "git init: fails if the branch exists without this run's metadata" {
+  git branch archeflow/test-run
   run "$LIB_DIR/archeflow-git.sh" init test-run
   [ "$status" -ne 0 ]
   [[ "$output" == *"already exists"* ]]
+}
+
+@test "git init: resumes an existing run of the same id (--dry-run, then --start-from do)" {
+  mkdir -p .archeflow
+  printf 'test_command: "true"\n' > .archeflow/config.yaml
+  "$LIB_DIR/archeflow-git.sh" init test-run 2>/dev/null
+  fp="$(cat .archeflow/runs/test-run/trusted-config)"
+  # resume while on the run branch
+  run "$LIB_DIR/archeflow-git.sh" init test-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Resuming run test-run"* ]]
+  # resume from the base branch: switches back to the run branch
+  git checkout main --quiet
+  run "$LIB_DIR/archeflow-git.sh" init test-run
+  [ "$status" -eq 0 ]
+  [ "$(git branch --show-current)" = "archeflow/test-run" ]
+  [ "$(cat .archeflow/runs/test-run/base-branch)" = "main" ]
+  # the records from the first init are kept
+  [ "$(cat .archeflow/runs/test-run/trusted-config)" = "$fp" ]
+  [ "$(cat .archeflow/runs/test-run/test-command)" = "true" ]
 }
 
 # --- commit ---
@@ -127,7 +146,7 @@ teardown() {
   "$LIB_DIR/archeflow-git.sh" merge test-run 2>/dev/null
 
   [ "$(git branch --show-current)" = "main" ]
-  [ "$(git log -1 --format=%s)" = "feat: archeflow run test-run complete" ]
+  [ "$(git log -1 --format=%s)" = "archeflow: merge run test-run" ]
   [ "$(git cat-file -p HEAD | grep -c '^parent')" -eq 2 ]
 }
 
@@ -140,7 +159,7 @@ teardown() {
   [ "$status" -eq 0 ]
   [ "$(git branch --show-current)" = "main" ]
   [ "$(git cat-file -p HEAD | grep -c '^parent')" -eq 1 ]
-  [ "$(git log -1 --format=%s)" = "feat: archeflow run test-run complete" ]
+  [ "$(git log -1 --format=%s)" = "archeflow: merge run test-run" ]
   [ -f work.txt ]
 }
 

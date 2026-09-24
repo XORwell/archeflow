@@ -2,7 +2,7 @@
 
 All notable changes to ArcheFlow are documented in this file.
 
-## [0.11.0] -- 2026-09-25
+## [0.11.0] -- 2026-09-24
 
 A hardening release: the plugin now installs and works from a clean machine, the documented
 commands exist, runs ask before merging, and a number of security problems are fixed. If you use ArcheFlow on repositories you
@@ -37,10 +37,11 @@ did not write, update.
 - Numbers read from event logs, lesson files and other `.archeflow/` data can no longer execute
   shell code. Previously a crafted value in a committed `.archeflow/events/*.jsonl` or
   `.archeflow/memory/lessons.jsonl` ran commands when you opened a report, a DAG or after a run.
-- Langfuse export: settings come from exactly one source (environment, or one `langfuse.env`
-  file). A `langfuse.env` committed to the repository is refused, parent directories are no
-  longer searched, and only `https://` hosts (or `http://` on loopback) are accepted. Before, a
-  repository could redirect your Langfuse keys and run data to a host of its choice.
+- Langfuse export: settings come only from the environment or your user-level
+  `~/.config/archeflow/langfuse.env` (or `~/.archeflow/langfuse.env`), never from the project,
+  whether committed, symlinked or a case variant. Only `https://` hosts (or `http://` on
+  loopback) are accepted. Before, a repository could redirect your Langfuse keys and run data to a
+  host of its choice. Move a project-local file to `~/.config/archeflow/langfuse.env`.
 - Ollama: only loopback hosts are contacted unless you set `ARCHEFLOW_OLLAMA_ALLOW_REMOTE=1`, so a
   repository's `config.yaml` cannot send your prompts elsewhere.
 - GNAP import no longer changes existing queue items; imported tasks arrive as `proposed`.
@@ -54,6 +55,25 @@ did not write, update.
   of marking unmerged branches as merged.
 - Hook commands from `.archeflow/hooks.yaml` are shown and confirmed before their first run in a
   session.
+- A run can no longer change ArcheFlow's own configuration: Maker commits touching
+  `.archeflow/` are refused at integrate; merge refuses `.archeflow/` changes other than the run's
+  own artifacts and events, and refuses if config, hooks, lenses or lessons changed during the run.
+- Post-merge tests run the `test_command` recorded at run start; if `config.yaml` changed, nothing
+  runs. A test command that is missing or not executable is a configuration error, not a failed
+  test, and never reverts a merge.
+- Scripts refuse to run when `.archeflow/` or a state directory is a symlink or resolves outside
+  the repository; writes check every path component.
+- Guardian, Skeptic, Sage, Trickster, Explorer and Creator have read-only tools; code under review
+  is not executed without your explicit confirmation of the exact command.
+- `git.auto_merge`, `multi-run.yaml`, `queue.md` and hook commands need your confirmation in the
+  session; `SECURITY.md` lists every repository file that can remove the merge gate or start
+  unattended work.
+- The Ollama base URL, model names and configured lenses are read and validated by the scripts
+  (`archeflow-ollama.sh chat --tier`, `archeflow-lens.sh merge --from-config`), never pasted into
+  a shell line. Lens `context_inject` accepts plain relative paths only.
+- `/archeflow:scan` never runs project code.
+- The evidence gate keeps `<file>.orig` before rewriting a review and logs each downgrade as an
+  `evidence.downgrade` event.
 - `SECURITY.md` describes the attacker model (repository content is untrusted) and what the
   scripts do and do not guarantee. A fuzz test feeds injection payloads through every script
   that reads `.archeflow/` data.
@@ -72,10 +92,32 @@ did not write, update.
   references, repeated Skeptic concerns are counted correctly, the Guardian "Paranoid" and
   Wiggum Break thresholds are applied as documented, and the budget break reads
   `costs.budget_usd`.
+- The Maker failure-mode check reads the run diff (`detect maker --diff`, now required) and counts
+  code files only; before, it could never fire in a real run, and on a diff it fired on any change.
+- Tunnel Vision no longer fires on clean or single-reviewer runs; Echo Chamber counts only the
+  current cycle.
+- Reports and DAGs are complete after real runs: `archeflow-event.sh` links parents
+  automatically, the DAG draws every event, the report reads the documented fields and derives
+  team and duration; `wiggum-check` and `check-system` log their own events.
+- `wiggum-check` includes the oscillation check; the default cycle limits per workflow and which
+  checks they allow are documented.
+- Cycle 2+ keeps the plan and the Act feedback available to the next cycle.
+- `/archeflow:review` includes new untracked files and detects the base branch.
+- A quoted `test_command` (`'npm test'`) is parsed correctly.
+- `archeflow-git.sh init` resumes an existing run with the same id, so `--dry-run` followed by
+  `--start-from do` works.
+- Merges approved later are recorded (`run.merged`, index status `merged`); the merge commit is
+  titled `archeflow: merge run <id>`.
+- The run skill waits for every agent (foreground), so `claude -p` no longer returns early.
+- The shipped `.archeflow/config.yaml` and the bundles match the documented defaults.
 - `merge_strategy: rebase` works. Event, memory and queue writes are locked against concurrent
   writers.
 
 ### Changed
+- The generated `.archeflow/.gitignore` keeps run state local (events, artifacts, runs,
+  worktrees, memory, review diffs, progress, agent card).
+- Removed `git.commit_artifacts` (it was never read) and `archeflow-rollback.sh --to`
+  (use `archeflow-git.sh rollback`).
 - The session-start hook is Bash and jq instead of Node.js.
 - Portability: runs the same on any locale and with the jq of current Debian and Ubuntu
   releases (1.6 and 1.7), without `yq`, PyYAML or `bc`. The default branch is detected instead of assuming `main`; a detached HEAD is refused.

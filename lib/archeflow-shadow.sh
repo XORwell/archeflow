@@ -7,7 +7,14 @@ set -euo pipefail
 #
 # Usage:
 #   archeflow-shadow.sh detect <archetype> <artifact-file> [--proposal <proposal-file>] [--diff <diff-file>]
-#   archeflow-shadow.sh check-system <run_id | run-dir>
+#   archeflow-shadow.sh check-system <run_id | run-dir> [--cycle <N>]
+#
+# detect maker needs --diff (the run diff, do-maker.diff): the changed files come
+# from the diff, the test-run evidence from the artifact (the Maker's report).
+#
+# With --run-id (detect) or a run ID (check-system), every detection is logged as a
+# shadow.detected event. The cycle recorded in it is --cycle, else 1 + the number of
+# cycle.boundary events already in the run's log.
 #
 # check-system reads what a real run writes: artifacts in .archeflow/artifacts/<run_id>/
 # (plan-creator.md, do-maker.diff from "archeflow-git.sh integrate", check-*.md) and
@@ -24,13 +31,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     echo "Usage: archeflow-shadow.sh detect <archetype> <artifact-file> [options]" >&2
-    echo "       archeflow-shadow.sh check-system <run_id | run-dir>" >&2
+    echo "       archeflow-shadow.sh check-system <run_id | run-dir> [--cycle <n>]" >&2
     echo "" >&2
     echo "Archetypes: explorer, creator, maker, guardian, skeptic, trickster, sage" >&2
     echo "" >&2
     echo "Options:" >&2
     echo "  --proposal <file>   Creator's proposal (for maker scope check)" >&2
-    echo "  --diff <file>       Maker's diff (for sage length comparison)" >&2
+    echo "  --diff <file>       The run diff, do-maker.diff (required for maker; sage/trickster scope)" >&2
     echo "  --run-id <id>       Run ID for event logging" >&2
     echo "  --cycle <n>         PDCA cycle number (recorded in the event; used by wiggum-check)" >&2
     echo "  --task-words <n>    Expected proposal size for creator scope check" >&2
@@ -183,49 +190,83 @@ detect_creator() {
     return 1
 }
 
+# --- Changed lines per file from a unified diff: "<lines>\t<path>" ---
+# Lines = added + removed lines (headers excluded). Path from "diff --git a/X b/Y" (Y).
+diff_file_lines() {
+    local file="$1"
+    awk '
+        /^diff --git / { f = $NF; sub(/^b\//, "", f); if (!(f in n)) { n[f] = 0; order[++k] = f }; next }
+        /^(\+\+\+|---) / { next }
+        f != "" && /^[+-]/ { n[f]++ }
+        END { for (i = 1; i <= k; i++) printf "%d\t%s\n", n[order[i]], order[i] }
+    ' "$file" 2>/dev/null
+}
+
+# Test files: tests/, test/, spec/, __tests__/ directories, or test_*, *_test.*,
+# *.test.*, *.spec.*, *_spec.*, *Test.* names.
+is_test_path() {
+    grep -qiE '(^|/)(tests?|specs?|__tests__|testdata)/|(^|/)test_[^/]*$|_test\.[^/]+$|\.(test|spec)\.[^/]+$|_spec\.[^/]+$|(^|/)[^/]*Tests?\.[A-Za-z]+$' <<<"$1"
+}
+
+# Not code: documentation, images, licence/changelog files, lock files.
+is_doc_path() {
+    grep -qiE '(^|/)docs?/|\.(md|markdown|rst|txt|adoc|org|png|jpe?g|gif|svg|ico|webp|pdf)$|(^|/)(license|licence|notice|authors|changelog|changes|contributing|readme)[^/]*$|(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|cargo\.lock|go\.sum|gemfile\.lock)$' <<<"$1"
+}
+
+# Evidence in the Maker's report that tests were run.
+MAKER_TEST_EVIDENCE='tests? (pass|passed|passing|ran|run:|succeeded|green)|[0-9]+ (passed|passing)|passed|✓|pytest|jest|vitest|mocha|rspec|phpunit|bats|cargo test|go test|npm (run )?test|yarn test|make test|ctest|exit (code|status) 0|test output|test run'
+
+# Maker (Rogue). Inputs: the Maker's report (test evidence), the run diff
+# (do-maker.diff from "archeflow-git.sh integrate": changed files and lines), and
+# optionally the Creator's proposal (scope). Only code files count: documentation,
+# images, licence and lock files are ignored, test files are counted separately.
+#   1. >= 3 code files changed and no test file changed
+#   2. >= MAKER_MIN_CODE_LINES (10) changed code lines and no test-run evidence in the report
+#   3. code files changed that the proposal does not mention (full path or file name)
 detect_maker() {
-    local artifact="$1"
+    local report="$1"
     local proposal_file="${2:-}"
+    local diff_file="${3:-}"
 
-    local diff_files
-    if [[ -f "$artifact" ]]; then
-        diff_files=$(extract_diff_files "$artifact" | wc -l) || diff_files=0
-    else
-        diff_files=0
-    fi
+    local code_files=0 test_files=0 code_lines=0 code_list="" lines path
+    while IFS=$'\t' read -r lines path; do
+        [[ -z "$path" ]] && continue
+        [[ "$lines" =~ ^[0-9]+$ ]] || lines=0
+        if is_test_path "$path"; then
+            test_files=$((test_files + 1))
+        elif ! is_doc_path "$path"; then
+            code_files=$((code_files + 1))
+            code_lines=$((code_lines + lines))
+            code_list+="$path"$'\n'
+        fi
+    done < <(diff_file_lines "$diff_file")
 
-    local test_files
-    test_files=$(extract_diff_files "$artifact" | grep -c -i "test\|spec\|_test\|\.test\." 2>/dev/null) || test_files=0
-
-    local has_test_evidence
-    has_test_evidence=$(grep -c -i "test.*pass\|tests.*pass\|pytest\|jest\|bats\|✓\|PASSED\|test.run\|test.output" "$artifact" 2>/dev/null) || has_test_evidence=0
-
-    if [[ "$diff_files" -ge 3 && "$test_files" -eq 0 ]]; then
-        echo "rogue|Zero test files with >= 3 files changed ($diff_files files, 0 tests)"
+    if [[ "$code_files" -ge 3 && "$test_files" -eq 0 ]]; then
+        echo "rogue|No test file changed with $code_files code files changed"
         return 0
     fi
 
-    if [[ "$has_test_evidence" -eq 0 && "$diff_files" -ge 1 ]]; then
-        echo "rogue|No test run evidence in output"
+    local min_lines="${MAKER_MIN_CODE_LINES:-10}"
+    if [[ "$code_lines" -ge "$min_lines" ]] && ! grep -qiE "$MAKER_TEST_EVIDENCE" "$report" 2>/dev/null; then
+        echo "rogue|No evidence in the report that tests ran ($code_lines code lines changed in $code_files files)"
         return 0
     fi
 
-    if [[ -n "$proposal_file" && -f "$proposal_file" ]]; then
-        local proposal_files
+    if [[ -n "$proposal_file" && -f "$proposal_file" && -n "$code_list" ]]; then
+        local proposal_files out_of_scope=0 changed
         proposal_files=$(extract_proposal_files "$proposal_file")
-        local changed_files
-        changed_files=$(extract_diff_files "$artifact")
-
-        local out_of_scope=0
         while IFS= read -r changed; do
             [[ -z "$changed" ]] && continue
-            if ! echo "$proposal_files" | grep -qF "$changed"; then
+            # Mentioned by full path, or by a path/name ending in its file name.
+            if ! awk -v c="$changed" -v b="${changed##*/}" '
+                    $0 == c || $0 == b || substr($0, length($0) - length(b)) == "/" b { f = 1 }
+                    END { exit !f }' <<<"$proposal_files"; then
                 out_of_scope=$((out_of_scope + 1))
             fi
-        done <<< "$changed_files"
+        done <<< "$code_list"
 
         if [[ "$out_of_scope" -gt 0 ]]; then
-            echo "rogue|$out_of_scope files changed outside proposal scope"
+            echo "rogue|$out_of_scope code files changed outside proposal scope"
             return 0
         fi
     fi
@@ -496,24 +537,34 @@ resolve_run() {
 detect_system_shadows() {
     local run_dir="$1"
     local event_file="${2:-}"
+    local cycle="${3:-}"
     local detected=()
 
-    # Tunnel Vision: all reviewers flag same category
     local review_files=""
     [[ -n "$run_dir" ]] && review_files=$(find "$run_dir" -maxdepth 1 -name "check-*.md" 2>/dev/null)
 
-    if [[ -n "$review_files" ]]; then
-        local categories=""
-        for rf in $review_files; do
-            local cats
-            cats=$(grep -ioE "security|reliability|design|quality|testing|consistency|breaking.change|dependency" "$rf" 2>/dev/null | sort -u)
-            categories="${categories}${cats}"$'\n'
-        done
-
-        local unique_cats
-        unique_cats=$(echo "$categories" | sort -u | grep -v '^$' | wc -l) || unique_cats=0
-        if [[ "$unique_cats" -le 1 && -n "$categories" ]]; then
-            detected+=("tunnel_vision|All reviewers flag same category ($unique_cats unique)")
+    # Tunnel Vision: every finding of the cycle is in one category. Read from the
+    # consolidated findings (findings-cycle-<N>.json, the cycle's, else the latest),
+    # and only with 2+ reviewers (check-*.md) and 3+ findings: one reviewer, or a
+    # clean run, cannot show tunnel vision.
+    local reviewers=0
+    [[ -n "$review_files" ]] && reviewers=$(printf '%s\n' "$review_files" | grep -c . || true)
+    local findings_file=""
+    if [[ -n "$run_dir" ]]; then
+        if [[ -n "$cycle" && -f "$run_dir/findings-cycle-$cycle.json" ]]; then
+            findings_file="$run_dir/findings-cycle-$cycle.json"
+        else
+            findings_file=$(find "$run_dir" -maxdepth 1 -name "findings-cycle-*.json" 2>/dev/null | sort -V | tail -1)
+        fi
+    fi
+    if [[ "$reviewers" -ge 2 && -n "$findings_file" ]]; then
+        local tv
+        tv=$(jq -r '[ .[]? | objects ] as $f
+            | ([ $f[] | .category | strings | ascii_downcase ] | unique) as $c
+            | if ($f | length) >= 3 and ($c | length) == 1 then "\($f | length)\t\($c[0])" else "" end' \
+            "$findings_file" 2>/dev/null) || tv=""
+        if [[ -n "$tv" ]]; then
+            detected+=("tunnel_vision|All ${tv%%$'\t'*} findings of $reviewers reviewers are in one category (${tv#*$'\t'})")
         fi
     fi
 
@@ -547,28 +598,29 @@ detect_system_shadows() {
         done
     fi
 
-    # Echo Chamber: 2+ check-phase agent.complete events, none mentioning
-    # CRITICAL/WARNING (elapsed time is not measured).
+    # Echo Chamber: unanimous approval in the current cycle (the events after the
+    # last cycle.boundary): 2+ review.verdict events, all APPROVED with no findings;
+    # without review.verdict events, 2+ check-phase agent.complete events none of
+    # which mentions CRITICAL/WARNING. Elapsed time is not measured.
     if [[ -n "$event_file" && -f "$event_file" ]]; then
-        local check_events
-        check_events=$(grep '"agent.complete"' "$event_file" 2>/dev/null | grep '"phase":"check"' || true)
-        if [[ -n "$check_events" ]]; then
-            local check_count
-            check_count=$(echo "$check_events" | wc -l | tr -d ' ')
-            local all_approved=true
-            while IFS= read -r evt; do
-                [[ -z "$evt" ]] && continue
-                local has_critical
-                has_critical=$(echo "$evt" | grep -c 'CRITICAL\|WARNING' 2>/dev/null) || has_critical=0
-                if [[ "$has_critical" -gt 0 ]]; then
-                    all_approved=false
-                    break
-                fi
-            done <<< "$check_events"
-
-            if [[ "$all_approved" == true && "$check_count" -ge 2 ]]; then
-                detected+=("echo_chamber|Unanimous approval from $check_count reviewers")
-            fi
+        local echo_result
+        echo_result=$(jq -rs '
+            def isint: type == "number" and . == floor;
+            [ .[] | objects | select(.seq | isint) ] as $ev
+            | ([ $ev[] | select(.type == "cycle.boundary") | .seq ] | max // 0) as $b
+            | [ $ev[] | select(.seq > $b) ] as $cur
+            | [ $cur[] | select(.type == "review.verdict") ] as $v
+            | if ($v | length) > 0 then
+                if ($v | length) >= 2 and all($v[]; ((.data.verdict? // "") | tostring | ascii_upcase) == "APPROVED"
+                                              and (((.data.findings? // []) | if type == "array" then length else 1 end) == 0))
+                then ($v | length | tostring) else "" end
+              else
+                [ $cur[] | select(.type == "agent.complete" and .phase == "check") ] as $c
+                | if ($c | length) >= 2 and all($c[]; (tostring | test("CRITICAL|WARNING") | not))
+                  then ($c | length | tostring) else "" end
+              end' "$event_file" 2>/dev/null) || echo_result=""
+        if [[ "$echo_result" =~ ^[0-9]+$ ]]; then
+            detected+=("echo_chamber|Unanimous approval from $echo_result reviewers")
         fi
     fi
 
@@ -628,6 +680,28 @@ detect_system_shadows() {
 }
 
 # ============================================================
+# Event logging
+# ============================================================
+
+# Cycle of a run: 1 + the number of cycle.boundary events in its log.
+current_cycle() {
+    local ef=".archeflow/events/$1.jsonl" n=0
+    [[ -f "$ef" ]] && { n=$(jq -c 'select(type == "object" and .type == "cycle.boundary")' "$ef" 2>/dev/null | wc -l | tr -d ' ') || n=0; }
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    echo $((n + 1))
+}
+
+# emit_shadow <run_id> <phase> <agent> <archetype> <shadow> <trigger> <cycle> <action>
+emit_shadow() {
+    [[ -x "${SCRIPT_DIR}/archeflow-event.sh" ]] || return 0
+    local data
+    data=$(jq -cn --arg a "$4" --arg s "$5" --arg t "$6" --arg c "$7" --arg act "$8" \
+        '{archetype: $a, shadow: $s, trigger: $t, action: $act}
+         + (if $c == "" then {} else {cycle: ($c | tonumber)} end)')
+    "${SCRIPT_DIR}/archeflow-event.sh" "$1" "shadow.detected" "$2" "$3" "$data" >/dev/null 2>&1 || true
+}
+
+# ============================================================
 # Main dispatch
 # ============================================================
 
@@ -674,12 +748,19 @@ main() {
                 echo "Error: --task-words must be a positive integer" >&2; exit 2
             fi
             [[ ! -f "$artifact" ]] && { echo "Error: artifact file not found: $artifact" >&2; exit 2; }
+            if [[ "$archetype" == "maker" ]]; then
+                [[ -n "$diff_file" ]] || { echo "Error: detect maker needs --diff <do-maker.diff> (files come from the diff, test evidence from the report)" >&2; exit 2; }
+                [[ -f "$diff_file" ]] || { echo "Error: diff file not found: $diff_file" >&2; exit 2; }
+            fi
+            if [[ -n "$run_id" ]] && [[ ! "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$run_id" == *..* ]]; then
+                echo "Error: invalid run ID: $run_id" >&2; exit 2
+            fi
 
             local result=""
             case "$archetype" in
                 explorer)  result=$(detect_explorer "$artifact") || true ;;
                 creator)   result=$(detect_creator "$artifact" "$task_words") || true ;;
-                maker)     result=$(detect_maker "$artifact" "$proposal_file") || true ;;
+                maker)     result=$(detect_maker "$artifact" "$proposal_file" "$diff_file") || true ;;
                 guardian)  result=$(detect_guardian "$artifact") || true ;;
                 skeptic)   result=$(detect_skeptic "$artifact") || true ;;
                 trickster) result=$(detect_trickster "$artifact" "$diff_file") || true ;;
@@ -692,13 +773,11 @@ main() {
                 local trigger="${result#*|}"
                 echo "SHADOW_DETECTED: $archetype/$shadow_name — $trigger"
 
-                if [[ -n "$run_id" && -x "${SCRIPT_DIR}/archeflow-event.sh" ]]; then
-                    local event_data
-                    event_data=$(jq -cn --arg a "$archetype" --arg s "$shadow_name" --arg t "$trigger" --arg c "$cycle" \
-                        '{archetype: $a, shadow: $s, trigger: $t, action: "correction_prompt"}
-                         + (if $c == "" then {} else {cycle: ($c | tonumber)} end)')
-                    "${SCRIPT_DIR}/archeflow-event.sh" "$run_id" "shadow.detected" "check" "$archetype" \
-                        "$event_data" 2>/dev/null || true
+                if [[ -n "$run_id" ]]; then
+                    local phase="check"
+                    case "$archetype" in explorer|creator) phase="plan" ;; maker) phase="do" ;; esac
+                    [[ -n "$cycle" ]] || cycle=$(current_cycle "$run_id")
+                    emit_shadow "$run_id" "$phase" "$archetype" "$archetype" "$shadow_name" "$trigger" "$cycle" "correction_prompt"
                 fi
                 exit 0
             else
@@ -714,14 +793,34 @@ main() {
             fi
 
             [[ -n "${1:-}" ]] || { echo "Error: run ID or run directory required" >&2; exit 2; }
-            resolve_run "$1"
+            local target="$1" sys_cycle=""
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --cycle) [[ $# -ge 2 ]] || { echo "Error: --cycle needs a value" >&2; exit 2; }
+                             sys_cycle="$2"; shift 2 ;;
+                    *) echo "Unknown option: $1" >&2; exit 2 ;;
+                esac
+            done
+            if [[ -n "$sys_cycle" && ! "$sys_cycle" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --cycle must be a positive integer" >&2; exit 2
+            fi
+            resolve_run "$target"
 
             local result
-            if result=$(detect_system_shadows "$RUN_DIR" "$EVENT_FILE"); then
+            if result=$(detect_system_shadows "$RUN_DIR" "$EVENT_FILE" "$sys_cycle"); then
                 echo "SYSTEM_SHADOW_DETECTED:"
                 echo "$result" | while IFS='|' read -r name trigger; do
                     echo "  - $name: $trigger"
                 done
+                # Log each detection when called with a run ID (not a directory).
+                if [[ ! -d "$target" ]]; then
+                    [[ -n "$sys_cycle" ]] || sys_cycle=$(current_cycle "$target")
+                    local name trigger
+                    while IFS='|' read -r name trigger; do
+                        [[ -n "$name" ]] && emit_shadow "$target" "act" "system" "system" "$name" "$trigger" "$sys_cycle" "corrective_action"
+                    done <<< "$result"
+                fi
                 exit 0
             else
                 echo "CLEAN: no system shadows detected"

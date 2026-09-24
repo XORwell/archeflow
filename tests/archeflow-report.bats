@@ -78,3 +78,76 @@ EVENTS
   [[ "$output" == *"[in-progress]"* ]]
   [[ "$output" == *"WIP task"* ]]
 }
+
+# ── the fields documented in skills/run/reference.md ───────────────────────
+
+# Events as the run skill emits them (no team, no duration_ms, no parents given).
+_documented_run() {
+  local E="$LIB_DIR/archeflow-event.sh"
+  "$E" doc run.start plan "" '{"task":"Fix average()","workflow":"fast","max_cycles":1}' 2>/dev/null
+  "$E" doc agent.start plan creator '{"archetype":"creator","model":"sonnet"}' 2>/dev/null
+  "$E" doc agent.complete plan creator '{"archetype":"creator","duration_ms":1000,"artifacts":["plan-creator.md"],"summary":"proposal","estimated_cost_usd":0.01}' 2>/dev/null
+  "$E" doc agent.start do maker '{"archetype":"maker","model":"sonnet"}' 2>/dev/null
+  "$E" doc agent.complete do maker '{"archetype":"maker","duration_ms":2000,"artifacts":["do-maker.md"],"summary":"fixed","estimated_cost_usd":0.02}' 2>/dev/null
+  "$E" doc agent.start check guardian '{"archetype":"guardian","model":"sonnet"}' 2>/dev/null
+  "$E" doc agent.complete check guardian '{"archetype":"guardian","duration_ms":1500,"artifacts":["check-guardian.md"],"summary":"ok","estimated_cost_usd":0.01}' 2>/dev/null
+  "$E" doc review.verdict check guardian '{"archetype":"guardian","verdict":"APPROVED","findings":[]}' 2>/dev/null
+  "$E" doc cycle.boundary act "" '{"cycle":1,"max_cycles":1,"exit_condition":"approved","decision":"merge","critical":0,"warning":0,"info":0}' 2>/dev/null
+  "$E" doc run.complete act "" '{"status":"awaiting_merge","cycles":1,"agents_total":3,"fixes_total":0}' 2>/dev/null
+}
+
+@test "report: a run logged per reference.md has a team, a duration and an exit condition" {
+  _documented_run
+  run "$LIB_DIR/archeflow-report.sh" .archeflow/events/doc.jsonl
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Team: `creator, maker, guardian`'* ]]
+  [[ "$output" == *"| **Duration** | <1 min |"* ]]
+  [[ "$output" == *"exit condition: approved (0 CRITICAL, 0 WARNING, 0 INFO) → merge"* ]]
+  [[ "$output" != *"unknown"* ]]
+  [[ "$output" != *"~0 min"* ]]
+  [[ "$output" != *"false →"* ]]
+  [[ "$output" == *"- \`plan-creator.md\`"* ]]
+  # the process flow is a tree, not a single root line
+  [[ "$output" == *"└── #3"* || "$output" == *"│   └── #3"* ]]
+}
+
+@test "report: duration comes from the timestamps when run.complete has no duration_ms" {
+  cat > "$BATS_TEST_TMPDIR/ts.jsonl" <<'EVENTS'
+{"ts":"2026-04-03T10:00:00Z","run_id":"t","seq":1,"parent":[],"type":"run.start","phase":"plan","agent":null,"data":{"task":"T"}}
+{"ts":"2026-04-03T10:07:30Z","run_id":"t","seq":2,"parent":[1],"type":"run.complete","phase":"act","agent":null,"data":{"status":"merged","cycles":1}}
+EVENTS
+  run "$LIB_DIR/archeflow-report.sh" "$BATS_TEST_TMPDIR/ts.jsonl" --summary
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(~7 min)"* ]]
+}
+
+@test "report: a later run.merged event turns awaiting_merge into merged" {
+  _documented_run
+  "$LIB_DIR/archeflow-event.sh" doc run.merged act "" '{"base":"main","strategy":"no-ff"}' 2>/dev/null
+  run "$LIB_DIR/archeflow-report.sh" .archeflow/events/doc.jsonl --summary
+  [ "$status" -eq 0 ]
+  [[ "$output" == "[merged]"* ]]
+  run "$LIB_DIR/archeflow-report.sh" .archeflow/events/doc.jsonl
+  [[ "$output" == *"| **Status** | merged |"* ]]
+  [[ "$output" == *"**Merged** into main"* ]]
+}
+
+@test "report: pre-0.11 cycle.boundary fields (met, next_action) are still read" {
+  cat > "$BATS_TEST_TMPDIR/old.jsonl" <<'EVENTS'
+{"ts":"2026-04-03T10:00:00Z","run_id":"o","seq":1,"parent":[],"type":"run.start","phase":"plan","agent":null,"data":{"task":"T","team":"default"}}
+{"ts":"2026-04-03T10:01:00Z","run_id":"o","seq":2,"parent":[1],"type":"cycle.boundary","phase":"act","agent":null,"data":{"cycle":1,"max_cycles":2,"met":true,"next_action":"merge"}}
+EVENTS
+  run "$LIB_DIR/archeflow-report.sh" "$BATS_TEST_TMPDIR/old.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"exit condition: met → merge"* ]]
+  [[ "$output" == *'Team: `default`'* ]]
+}
+
+@test "report: run.start team as a list (as the run skill writes it) is joined" {
+  cat > "$BATS_TEST_TMPDIR/team.jsonl" <<'EVENTS'
+{"ts":"2026-04-03T10:00:00Z","run_id":"tm","seq":1,"parent":[],"type":"run.start","phase":"plan","agent":null,"data":{"task":"T","team":["creator","maker","guardian"]}}
+EVENTS
+  run "$LIB_DIR/archeflow-report.sh" "$BATS_TEST_TMPDIR/team.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Team: `creator, maker, guardian`'* ]]
+}

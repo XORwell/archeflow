@@ -61,17 +61,47 @@ if [[ ! -f "$EVENT_FILE" ]]; then
   exit 1
 fi
 
-# Event files can come from the repository (they are committed with each run),
-# so their fields are never used in shell arithmetic: bash would evaluate a value
-# like 'a[$(cmd)]'. Numbers are computed in jq and checked with af_as_int.
+# Event files are local by default but can come from a repository (a user may
+# commit them), so their fields are never used in shell arithmetic: bash would
+# evaluate a value like 'a[$(cmd)]'. Numbers are computed in jq and checked with
+# af_as_int.
+#
+# Fields read (the schema in skills/run/reference.md):
+#   run.start       data.task, data.workflow, data.team (optional; else the roles
+#                   seen in agent.start/agent.complete/review.verdict events)
+#   run.complete    data.status, cycles, agents_total, fixes_total, shadows,
+#                   duration_ms (optional; else run.start ts -> run.complete ts)
+#   run.merged      overrides the status with "merged" (a merge after awaiting_merge)
+#   cycle.boundary  data.cycle, max_cycles, exit_condition, decision
+#                   (the pre-0.11 names met / next_action are still read)
 JQ_NUM='def num: if type == "number" then . elif type == "string" then (tonumber? // null) else null end;'
 
-# Prints the run duration in whole minutes, or nothing if unknown / zero.
-duration_minutes() {
-  local m
-  m=$(echo "$1" | jq -r "${JQ_NUM}"' (.data.duration_ms | num) as $d
-      | if $d == null or $d == 0 then "" else ($d / 60000 | floor | tostring) end' 2>/dev/null || true)
-  af_as_int "$m" ""
+# Run duration in whole seconds, or nothing if unknown.
+duration_seconds() {
+  local d
+  d=$(jq -rs "${JQ_NUM}"'
+      def t: (.ts | strings | try fromdateiso8601 catch null) // null;
+      [ .[] | objects ] as $ev
+      | ([ $ev[] | select(.type == "run.start") ] | first) as $s
+      | ([ $ev[] | select(.type == "run.complete") ] | last) as $c
+      | (if $c == null then null else ($c.data.duration_ms? | num) end) as $ms
+      | if $ms != null and $ms > 0 then ($ms / 1000 | floor | tostring)
+        elif $s != null and $c != null and ($s | t) != null and ($c | t) != null
+             and ($c | t) >= ($s | t) then (($c | t) - ($s | t) | floor | tostring)
+        else "" end' "$EVENT_FILE" 2>/dev/null || true)
+  af_as_int "$d" ""
+}
+
+# "<1 min", "~N min", or nothing if unknown.
+duration_display() {
+  local secs
+  secs=$(duration_seconds)
+  [[ -n "$secs" ]] || return 0
+  if [[ "$secs" -lt 60 ]]; then
+    echo "<1 min"
+  else
+    echo "~$((secs / 60)) min"
+  fi
 }
 
 # Helper: extract events by type
@@ -85,19 +115,32 @@ RUN_COMPLETE=$(events_of_type "run.complete" | head -1)
 RUN_ID=$(echo "$RUN_START" | jq -r '.run_id // "unknown"')
 TASK=$(echo "$RUN_START" | jq -r '.data.task // "unknown"')
 WORKFLOW=$(echo "$RUN_START" | jq -r '.data.workflow // "unknown"')
-TEAM=$(echo "$RUN_START" | jq -r '.data.team // "unknown"')
+# Team: data.team if given, else the roles that took part, in order of appearance.
+TEAM=$(echo "$RUN_START" | jq -r '.data.team // empty
+  | if type == "array" then map(tostring) | join(", ") else tostring end' 2>/dev/null || true)
+if [[ -z "$TEAM" ]]; then
+  TEAM=$(jq -rs '[ .[] | objects
+      | select(.type == "agent.start" or .type == "agent.complete" or .type == "review.verdict")
+      | (.data.archetype? // .agent) | strings | select(. != "" and . != "system") ]
+    | reduce .[] as $r ([]; if index([$r]) then . else . + [$r] end) | join(", ")' \
+    "$EVENT_FILE" 2>/dev/null || true)
+fi
+[[ -n "$TEAM" ]] || TEAM="unknown"
+# A merge confirmed after the run ended (awaiting_merge) is logged as run.merged.
+MERGED=$(jq -r 'select(.type == "run.merged") | "yes"' "$EVENT_FILE" 2>/dev/null | head -1 || true)
 
 # --summary mode: one-line output and exit
 if [[ "$MODE" == "summary" ]]; then
   if [[ -n "$RUN_COMPLETE" ]]; then
     STATUS=$(echo "$RUN_COMPLETE" | jq -r '.data.status // "unknown"')
+    [[ -n "$MERGED" ]] && STATUS="merged"
     CYCLES=$(echo "$RUN_COMPLETE" | jq -r '.data.cycles // "?"')
     # Handle both agents_total and agents field names
     AGENTS=$(echo "$RUN_COMPLETE" | jq -r '.data.agents_total // .data.agents // "?"')
     FIXES=$(echo "$RUN_COMPLETE" | jq -r '.data.fixes_total // .data.fixes // "?"')
-    DURATION_MIN=$(duration_minutes "$RUN_COMPLETE")
-    if [[ -n "$DURATION_MIN" ]]; then
-      echo "[${STATUS}] ${TASK} — ${CYCLES} cycles, ${AGENTS} agents, ${FIXES} fixes (~${DURATION_MIN}min) [${RUN_ID}]"
+    DURATION=$(duration_display)
+    if [[ -n "$DURATION" ]]; then
+      echo "[${STATUS}] ${TASK} — ${CYCLES} cycles, ${AGENTS} agents, ${FIXES} fixes (${DURATION}) [${RUN_ID}]"
     else
       echo "[${STATUS}] ${TASK} — ${CYCLES} cycles, ${AGENTS} agents, ${FIXES} fixes [${RUN_ID}]"
     fi
@@ -170,17 +213,16 @@ HEADER
   # Overview table from run.complete
   if [[ -n "$RUN_COMPLETE" ]]; then
     STATUS=$(echo "$RUN_COMPLETE" | jq -r '.data.status // "unknown"')
+    [[ -n "$MERGED" ]] && STATUS="merged"
     CYCLES=$(echo "$RUN_COMPLETE" | jq -r '.data.cycles // "?"')
     # Handle both agents_total and agents field names
     AGENTS=$(echo "$RUN_COMPLETE" | jq -r '.data.agents_total // .data.agents // "?"')
     FIXES=$(echo "$RUN_COMPLETE" | jq -r '.data.fixes_total // .data.fixes // "?"')
-    SHADOWS=$(echo "$RUN_COMPLETE" | jq -r '.data.shadows // "0"')
-    DURATION_MIN=$(duration_minutes "$RUN_COMPLETE")
-    if [[ -n "$DURATION_MIN" ]]; then
-      DURATION_DISPLAY="~${DURATION_MIN} min"
-    else
-      DURATION_DISPLAY="n/a"
-    fi
+    # Shadows: data.shadows, else the shadow.detected events in the log.
+    SHADOWS=$(echo "$RUN_COMPLETE" | jq -r '.data.shadows // empty | tostring' 2>/dev/null || true)
+    [[ -n "$SHADOWS" ]] || SHADOWS=$(jq -c 'select(.type == "shadow.detected")' "$EVENT_FILE" 2>/dev/null | wc -l | tr -d ' ')
+    DURATION_DISPLAY=$(duration_display)
+    [[ -n "$DURATION_DISPLAY" ]] || DURATION_DISPLAY="n/a"
 
     cat <<TABLE
 | Field | Value |
@@ -233,8 +275,6 @@ TABLE
   while IFS= read -r event; do
     TYPE=$(echo "$event" | jq -r '.type')
     PHASE=$(echo "$event" | jq -r '.phase')
-    AGENT=$(echo "$event" | jq -r '.agent // ""')
-    TS=$(echo "$event" | jq -r '.ts')
 
     # Phase header on transition
     if [[ "$PHASE" != "$CURRENT_PHASE" && "$TYPE" != "run.start" && "$TYPE" != "run.complete" ]]; then
@@ -248,11 +288,14 @@ TABLE
       agent.complete)
         ARCHETYPE=$(echo "$event" | jq -r '.data.archetype // .agent // "unknown"')
         DURATION_S=$(af_as_int "$(echo "$event" | jq -r "${JQ_NUM}"' (.data.duration_ms | num) // 0 | . / 1000 | floor' 2>/dev/null)")
-        TOKENS=$(echo "$event" | jq -r '.data.tokens // 0')
+        # Extras: tokens and estimated cost, when recorded.
+        EXTRAS=$(echo "$event" | jq -r "${JQ_NUM}"' [ ((.data.tokens | num) // 0 | select(. > 0) | "\(.) tokens"),
+            ((.data.estimated_cost_usd | num) // null | select(. != null) | "$\(. * 100 | round / 100)") ]
+            | map(", " + .) | join("")' 2>/dev/null || true)
         SUMMARY=$(echo "$event" | jq -r '.data.summary // "no summary"')
-        ARTIFACTS=$(echo "$event" | jq -r '(.data.artifacts // []) | join(", ")')
+        ARTIFACTS=$(echo "$event" | jq -r '(.data.artifacts // []) | if type == "array" then map(tostring) | join(", ") else tostring end' 2>/dev/null || true)
 
-        echo "**${ARCHETYPE}** (${DURATION_S}s, ${TOKENS} tokens)"
+        echo "**${ARCHETYPE}** (${DURATION_S}s${EXTRAS})"
         echo ": ${SUMMARY}"
         if [[ -n "$ARTIFACTS" ]]; then
           echo ": Artifacts: ${ARTIFACTS}"
@@ -317,13 +360,34 @@ TABLE
       cycle.boundary)
         CYCLE=$(echo "$event" | jq -r '.data.cycle // "?"')
         MAX=$(echo "$event" | jq -r '.data.max_cycles // "?"')
-        MET=$(echo "$event" | jq -r '.data.met // false')
-        NEXT=$(echo "$event" | jq -r '.data.next_action // "unknown"')
+        # exit_condition/decision (reference.md); met/next_action from older logs.
+        EXIT_COND=$(echo "$event" | jq -r '.data.exit_condition // (if .data.met == true then "met"
+            elif .data.met == false then "not met" else "not recorded" end) | tostring')
+        NEXT=$(echo "$event" | jq -r '.data.decision // .data.next_action // "not recorded" | tostring')
+        COUNTS=$(echo "$event" | jq -r '[ ("critical", "warning", "info") as $k
+            | select(.data[$k]? != null) | "\(.data[$k]) \($k | ascii_upcase)" ] | join(", ")' 2>/dev/null || true)
 
         echo ""
         echo "---"
         echo ""
-        echo "**Cycle ${CYCLE}/${MAX}** — exit condition met: ${MET} → ${NEXT}"
+        if [[ -n "$COUNTS" ]]; then
+          echo "**Cycle ${CYCLE}/${MAX}** — exit condition: ${EXIT_COND} (${COUNTS}) → ${NEXT}"
+        else
+          echo "**Cycle ${CYCLE}/${MAX}** — exit condition: ${EXIT_COND} → ${NEXT}"
+        fi
+        echo ""
+        ;;
+
+      wiggum.break)
+        BTYPE=$(echo "$event" | jq -r '.data.type // "?" | tostring')
+        REASONS=$(echo "$event" | jq -r '[ (.data.triggers // [])[]? | .reason? | strings ] | join("; ")' 2>/dev/null || true)
+        echo "- **Wiggum Break** (${BTYPE}): ${REASONS}"
+        echo ""
+        ;;
+
+      run.merged)
+        BASE=$(echo "$event" | jq -r '.data.base // "base branch" | tostring')
+        echo "- **Merged** into ${BASE}"
         echo ""
         ;;
     esac
@@ -396,7 +460,14 @@ TABLE
     echo ""
     echo "## Artifacts"
     echo ""
-    echo "$RUN_COMPLETE" | jq -r '(.data.artifacts // [])[] | "- `" + . + "`"'
+    # run.complete.data.artifacts, else the artifacts named by agent.complete events.
+    ARTS=$(echo "$RUN_COMPLETE" | jq -r '(.data.artifacts // [])[]? | strings | "- `" + . + "`"' 2>/dev/null || true)
+    if [[ -z "$ARTS" ]]; then
+      ARTS=$(jq -rs '[ .[] | objects | select(.type == "agent.complete") | (.data.artifacts? // [])
+          | if type == "array" then .[] else . end | strings ] | unique | .[] | "- `" + . + "`"' \
+        "$EVENT_FILE" 2>/dev/null || true)
+    fi
+    echo "${ARTS:-(none recorded)}"
   fi
 }
 

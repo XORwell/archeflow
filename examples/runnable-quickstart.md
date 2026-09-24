@@ -39,7 +39,8 @@ ArcheFlow initialized from bundle: quick-fix
 Ready to run: archeflow:run
 ```
 
-The script also writes `.archeflow/.gitignore` (keeps secrets, locks and logs out of git). The
+The script also writes `.archeflow/.gitignore`: secrets, locks and run state (events, artifacts,
+run metadata, worktrees, memory) stay out of git, the configuration can be committed. The
 `quick-fix` bundle is a one-cycle setup: Creator plans, Maker implements, Guardian reviews.
 `/archeflow:init` additionally asks for your test command and stores it as `test_command` in
 `.archeflow/config.yaml`; with the plain script, add that line yourself if you want tests to run

@@ -69,3 +69,30 @@ EVENTS
   # Should contain box-drawing characters (either unicode or ASCII connectors)
   [[ "$output" == *"├"* ]] || [[ "$output" == *"└"* ]]
 }
+
+@test "dag: events without parents are still drawn (regression: only #1 was rendered)" {
+  cat > "$BATS_TEST_TMPDIR/flat.jsonl" <<'EVENTS'
+{"ts":"2026-04-03T10:00:00Z","run_id":"f","seq":1,"parent":[],"type":"run.start","phase":"plan","agent":null,"data":{}}
+{"ts":"2026-04-03T10:01:00Z","run_id":"f","seq":2,"parent":[],"type":"cycle.boundary","phase":"act","agent":null,"data":{"cycle":1,"max_cycles":1,"decision":"merge"}}
+{"ts":"2026-04-03T10:02:00Z","run_id":"f","seq":3,"parent":[],"type":"run.complete","phase":"act","agent":null,"data":{"agents_total":3}}
+{"ts":"2026-04-03T10:02:00Z","run_id":"f","seq":4,"parent":[99],"type":"agent.complete","phase":"act","agent":"sage","data":{}}
+EVENTS
+  run "$LIB_DIR/archeflow-dag.sh" "$BATS_TEST_TMPDIR/flat.jsonl" --no-color
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#2"*"cycle 1/1 → merge"* ]]
+  [[ "$output" == *"#3"*"run.complete"* ]]
+  [[ "$output" == *"#4"*"sage"* ]]
+}
+
+@test "dag: events written without parents by archeflow-event.sh form a tree" {
+  for e in "run.start plan -" "agent.start plan creator" "agent.complete plan creator" \
+           "agent.start check guardian" "review.verdict check guardian" "cycle.boundary act -"; do
+    read -r t p a <<<"$e"; [[ "$a" == "-" ]] && a=""
+    "$LIB_DIR/archeflow-event.sh" tree "$t" "$p" "$a" '{"archetype":"x","verdict":"APPROVED"}' 2>/dev/null
+  done
+  run "$LIB_DIR/archeflow-dag.sh" .archeflow/events/tree.jsonl --no-color
+  [ "$status" -eq 0 ]
+  # agent.complete (#3) is nested one level below its agent.start (#2)
+  [[ "$output" == *"#2  "*$'\n'"    └── #3 "* ]] || [[ "$output" == *$'\n'"│   └── #3 "* ]]
+  [ "$(grep -c '#' <<<"$output")" -eq 6 ]
+}

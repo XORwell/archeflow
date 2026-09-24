@@ -75,7 +75,5 @@ phases:
       INFO findings: document and track, fix if time allows.
       Trickster findings get priority — they represent actual exploit paths.
 
-hooks:
-  pre_plan: []
-  post_check: []
-  post_act: []
+# Hooks are not set here: commands for the four hook points (run-start, pre-merge,
+# post-merge, run-complete) go in .archeflow/hooks.yaml, see docs/hooks.md.

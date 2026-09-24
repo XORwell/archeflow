@@ -6,7 +6,9 @@
 # Guardian (or other reviewers).
 #
 # Usage:
-#   archeflow-review.sh                          # Uncommitted changes (staged + unstaged)
+#   archeflow-review.sh                          # Uncommitted changes (staged + unstaged
+#                                                # + new untracked files, except ignored
+#                                                # files and .archeflow/)
 #   archeflow-review.sh --branch feat/batch-api  # Branch diff vs the base branch
 #   archeflow-review.sh --commit HEAD~3..HEAD    # Commit range
 #   archeflow-review.sh --base develop           # Override base branch
@@ -35,6 +37,7 @@ STAT_ONLY="false"
 # Helpers
 # ---------------------------------------------------------------------------
 
+# shellcheck disable=SC2034  # read by die() in archeflow-common.sh
 AF_LOG_PREFIX="af-review"
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
@@ -108,7 +111,7 @@ parse_args() {
       -h|--help)
         echo "Usage: $0 [--branch <name>] [--commit <range>] [--base <branch>] [--stat-only]"
         echo ""
-        echo "  (no args)           Review uncommitted changes (staged + unstaged)"
+        echo "  (no args)           Review uncommitted changes (staged, unstaged and new untracked files)"
         echo "  --branch <name>     Review branch diff against the base branch"
         echo "  --commit <range>    Review a commit range (e.g. HEAD~3..HEAD)"
         echo "  --base <branch>     Override base branch (default: origin/HEAD, main, master, current)"
@@ -143,6 +146,24 @@ get_diff() {
       if [[ -z "$diff_text" ]]; then
         # Maybe everything is staged, try just staged
         diff_text=$(git diff --cached 2>/dev/null || true)
+      fi
+      # New files are the common case for a feature: add untracked, non-ignored
+      # files as new-file diffs. ArcheFlow's own state (.archeflow/, e.g. the
+      # review.diff this review writes) is not part of the change.
+      local untracked_diff="" f d
+      while IFS= read -r -d '' f; do
+        [[ "$f" == .archeflow/* ]] && continue
+        [[ -f "$f" && ! -L "$f" ]] || continue
+        # exit 1 = "files differ", the expected result against /dev/null
+        d=$(git diff --no-index -- /dev/null "$f" 2>/dev/null || true)
+        [[ -n "$d" ]] && untracked_diff+="${d}"$'\n'
+      done < <(git ls-files -z --others --exclude-standard 2>/dev/null)
+      if [[ -n "$untracked_diff" ]]; then
+        if [[ -n "$diff_text" ]]; then
+          diff_text="${diff_text}"$'\n'"${untracked_diff%$'\n'}"
+        else
+          diff_text="${untracked_diff%$'\n'}"
+        fi
       fi
       ;;
     branch)
@@ -189,7 +210,7 @@ main() {
 
   # Describe what we're reviewing
   case "$MODE" in
-    uncommitted) info "Reviewing: uncommitted changes vs HEAD" ;;
+    uncommitted) info "Reviewing: uncommitted changes vs HEAD (including untracked files)" ;;
     branch)      info "Reviewing: branch '${TARGET}' vs '${BASE_BRANCH}'" ;;
     commit)      info "Reviewing: commit range '${TARGET}'" ;;
   esac

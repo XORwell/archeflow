@@ -41,7 +41,6 @@ E2E_KEYS=(
   "archeflow-shadow.sh detect"
   "archeflow-shadow.sh check-system"
   "archeflow-convergence.sh score"
-  "archeflow-convergence.sh oscillation"
   "archeflow-convergence.sh wiggum-check"
   "archeflow-git.sh merge"
   "archeflow-rollback.sh"
@@ -91,15 +90,27 @@ step() {
   for kv in "$@"; do
     cmd="${cmd//<${kv%%=*}>/${kv#*=}}"
   done
+  cmd="${cmd}${APPEND:+ $APPEND}"
   local ph_re='<[a-zA-Z_-]+>'
   [[ ! "$cmd" =~ $ph_re ]] || { echo "unsubstituted placeholder in: $cmd" >&2; return 1; }
   run bash -c "$cmd"
 }
 
+# A code span of SKILL.md that starts with <prefix> (option strings the skill gives in prose,
+# e.g. the Maker's --diff), with placeholders substituted like step() does.
+skill_span() {
+  local span
+  span="$(grep -oE "\`$1[^\`]*\`" "$SKILL" | head -1 | sed 's/^`//; s/`$//')"
+  [[ -n "$span" ]] || { echo "SKILL.md has no span starting with '$1'" >&2; return 1; }
+  printf '%s' "${span//<run_id>/$RUN_ID}"
+}
+
 # Event helper: data object written to event.json (as the skill says), then the event command.
 emit() {  # <type> <phase> <agent> <json>
   printf '%s\n' "$4" > ".archeflow/artifacts/$RUN_ID/event.json"
-  step "archeflow-event.sh" "type=$1" "phase=$2" "agent=$3"
+  # <agent> is the role name or "" (the skill: 'agent `""`'); an empty substitution
+  # would drop the argument and shift the JSON into the agent field.
+  step "archeflow-event.sh" "type=$1" "phase=$2" "agent=${3:-\"\"}"
   [ "$status" -eq 0 ]
 }
 
@@ -137,42 +148,70 @@ _findings() {  # <N> <json array>
   printf '%s\n' "$2" > ".archeflow/artifacts/$RUN_ID/findings-cycle-$1.json"
 }
 
-# One full cycle of Do + Check + Act commands.
+# One full cycle of Do + Check + Act commands, with the events the skill requires.
 _cycle() {  # <N> <maker-file> <maker-content> <guardian verdict> <finding line> <findings json>
   N="$1"
+  local art=".archeflow/artifacts/$RUN_ID"
   step "archeflow-git.sh worktree"; [ "$status" -eq 0 ]
   local wt="${lines[${#lines[@]}-1]}"
   [ -d "$wt" ]
+  emit agent.start do maker '{"archetype":"maker","model":"sonnet"}'
   _maker "$wt" "$2" "$3"
   _maker "$wt" "tests/test_$(basename "$2" .py).sh" "echo ok"
-  echo "Implemented $2" > ".archeflow/artifacts/$RUN_ID/do-maker.md"
+  printf 'Implemented %s. Ran tests/run.sh: 1 passed.\nSTATUS: DONE\n' "$2" > "$art/do-maker.md"
+  emit agent.complete do maker '{"archetype":"maker","duration_ms":2000,"artifacts":["do-maker.md"],"summary":"implemented","estimated_cost_usd":0.02}'
   step "archeflow-git.sh integrate"; [ "$status" -eq 0 ]
-  [ -s ".archeflow/artifacts/$RUN_ID/do-maker.diff" ]
-  grep -qx "$2" ".archeflow/artifacts/$RUN_ID/do-maker-files.txt"
+  [ -s "$art/do-maker.diff" ]
+  grep -qx "$2" "$art/do-maker-files.txt"
   [ ! -d "$wt" ]
   [ "$(git branch --show-current)" = "archeflow/$RUN_ID" ]
+  # Maker failure-mode check with the options the skill gives for the Maker
+  APPEND="$(skill_span '--diff ') $(skill_span '--proposal ')" \
+    step "archeflow-shadow.sh detect" "role=maker" "artifact=do-maker"
+  [ "$status" -eq 1 ] || { echo "$output"; return 1; }       # one code file + its test, tests ran: clean
+  [[ "$output" == *"CLEAN: maker"* ]]
 
+  emit agent.start check guardian '{"archetype":"guardian","model":"sonnet"}'
   _review guardian "$4" "$5"
-  step "archeflow-evidence.sh validate" "role=guardian"   # 0 = downgrades listed, 1 = none
-  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
-  [[ "$output" == *"Findings:"* ]]
+  emit agent.complete check guardian '{"archetype":"guardian","duration_ms":1500,"artifacts":["check-guardian.md"],"summary":"reviewed","estimated_cost_usd":0.01}'
+  step "archeflow-evidence.sh validate" "role=guardian"
+  [ "$status" -eq 1 ]                                         # the fixtures cite file:line: nothing to downgrade
+  [[ "$output" == *"Downgrades: 0"* ]]
   step "archeflow-shadow.sh detect" "role=guardian" "artifact=check-guardian"
-  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+  [ "$status" -eq 1 ]
+  local verdict_findings='[]'
+  [[ -n "$5" ]] && verdict_findings="$(jq -c '[.[] | {location: .file, severity, category, description: .id}]' <<<"$6")"
+  emit review.verdict check guardian "{\"archetype\":\"guardian\",\"verdict\":\"$4\",\"findings\":$verdict_findings}"
 
   _findings "$N" "$6"
-  step "archeflow-shadow.sh check-system"; [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+  step "archeflow-shadow.sh check-system"
+  [ "$status" -eq 1 ] || { echo "$output"; return 1; }       # one reviewer: never tunnel vision
+  [[ "$output" == *"CLEAN"* ]]
   if (( N >= 2 )); then
     step "archeflow-convergence.sh score"; [ "$status" -eq 0 ]
-    jq -e '.convergence_score | numbers' ".archeflow/artifacts/$RUN_ID/convergence-cycle-$N.json"
-  fi
-  if (( N >= 3 )); then
-    step "archeflow-convergence.sh oscillation"; [ "$status" -eq 1 ]
-    jq -e '.oscillation_detected == false' <<<"$output"
+    jq -e '.convergence_score | numbers' "$art/convergence-cycle-$N.json"
   fi
   step "archeflow-convergence.sh wiggum-check"
   [ "$status" -eq 1 ]
   jq -e '.wiggum_break == false' <<<"$output"
-  emit cycle.boundary act "" "{\"cycle\":$N,\"max_cycles\":3}"
+
+  local warnings decision exit_cond
+  warnings="$(jq 'length' <<<"$6")"
+  if [[ "$4" == APPROVED ]]; then decision=merge; exit_cond=approved; else decision=cycle_back; exit_cond=findings_open; fi
+  emit cycle.boundary act "" "{\"cycle\":$N,\"max_cycles\":3,\"exit_condition\":\"$exit_cond\",\"decision\":\"$decision\",\"critical\":0,\"warning\":$warnings,\"info\":0}"
+
+  if [[ "$decision" == cycle_back ]]; then
+    # Act step 5 / act-phase Step 5: copy plan-* and act-feedback.md, move do-* and check-*.
+    printf '## Cycle %s -> Cycle %s\n## Creator-Routed Issues\n## Maker-Routed Issues\n| 1 | guardian | WARNING | x | y | z | 1 |\n' \
+      "$N" "$((N + 1))" > "$art/act-feedback.md"
+    mkdir -p "$art/cycle-$N"
+    cp "$art"/plan-*.md "$art/act-feedback.md" "$art/cycle-$N/"
+    mv "$art"/do-* "$art"/check-* "$art/cycle-$N/"
+    # what the next cycle reads is still in place; the old reviews and diff are not
+    [ -f "$art/plan-creator.md" ] && [ -f "$art/act-feedback.md" ]
+    [ ! -e "$art/check-guardian.md" ] && [ ! -e "$art/do-maker.diff" ]
+    [ -f "$art/findings-cycle-$N.json" ]
+  fi
 }
 
 # The whole run, in the order of SKILL.md.
@@ -190,8 +229,10 @@ _run_flow() {  # <base-branch>
   emit run.start plan "" "$(jq -cn --rawfile task ".archeflow/artifacts/$RUN_ID/task.md" '{task: $task, workflow: "thorough", max_cycles: 3}')"
 
   # 1. Plan (simulated Creator)
-  printf '## Proposal\nChange src/calc.py and tests/test_calc.sh.\n### Confidence\n| task understanding | 0.9 |\nSTATUS: DONE\n' \
+  emit agent.start plan creator '{"archetype":"creator","model":"sonnet"}'
+  printf '## Proposal\nChange src/calc.py, src/negative.py, src/cleanup.py and tests/test_calc.sh.\n### Confidence\n| task understanding | 0.9 |\nSTATUS: DONE\n' \
     > ".archeflow/artifacts/$RUN_ID/plan-creator.md"
+  emit agent.complete plan creator '{"archetype":"creator","duration_ms":1000,"artifacts":["plan-creator.md"],"summary":"proposal","estimated_cost_usd":0.01}'
 
   # 2-4. Three cycles: a WARNING, then a new WARNING, then approval.
   _cycle 1 src/calc.py $'def add(a, b): return a + b\ndef subtract(a, b): return a - b' REJECTED \
@@ -205,7 +246,9 @@ _run_flow() {  # <base-branch>
   # Merge (config: git.auto_merge true = confirmation given; test_command set)
   step "archeflow-git.sh merge"; [ "$status" -eq 0 ]
   [ "$(git branch --show-current)" = "$base" ]
-  [ "$(git log -1 --format=%s)" = "feat: archeflow run $RUN_ID complete" ]
+  # the subject archeflow-rollback.sh accepts (neutral since 0.11; legacy "feat:" form still accepted)
+  local subject; subject="$(git log -1 --format=%s)"
+  [ "$subject" = "archeflow: merge run $RUN_ID" ]
   step "archeflow-rollback.sh"; [ "$status" -eq 0 ]
   step "archeflow-git.sh cleanup"; [ "$status" -eq 0 ]
   ! git show-ref --verify --quiet "refs/heads/archeflow/$RUN_ID"
@@ -218,9 +261,23 @@ _run_flow() {  # <base-branch>
   step "archeflow-memory.sh extract"; [ "$status" -eq 0 ]
   step "archeflow-memory.sh decay"; [ "$status" -eq 0 ]
   step "archeflow-score.sh extract"; [ "$status" -eq 0 ]
+  # the review.verdict and agent.complete events the skill requires are enough to score
+  jq -se 'map(.archetype) | index("guardian") != null' .archeflow/memory/effectiveness.jsonl
   step "index-append" "status=merged"; [ "$status" -eq 0 ]
   step "archeflow-report.sh"; [ "$status" -eq 0 ]
-  [ -n "$output" ]
+  [[ "$output" == "[merged] "*"3 cycles, 9 agents"*"min)"* ]] || { echo "summary: $output"; head -c 600 ".archeflow/events/$RUN_ID.jsonl"; return 1; }   # the --summary line has a duration
+
+  # The full report of this run has a team, a duration and an exit condition,
+  # and its process flow is a tree (regression: "Team: unknown", "~0 min",
+  # "exit condition met: false -> unknown", a DAG of one line).
+  run "$ROOT/lib/archeflow-report.sh" ".archeflow/events/$RUN_ID.jsonl"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'Team: `creator, maker, guardian`'* ]]
+  [[ "$output" == *"| **Duration** | <1 min |"* || "$output" =~ \|\ \*\*Duration\*\*\ \|\ ~[0-9]+\ min ]]
+  [[ "$output" == *"**Cycle 1/3** — exit condition: findings_open (0 CRITICAL, 1 WARNING, 0 INFO) → cycle_back"* ]]
+  [[ "$output" == *"**Cycle 3/3** — exit condition: approved (0 CRITICAL, 0 WARNING, 0 INFO) → merge"* ]]
+  [[ "$output" != *"unknown"* && "$output" != *"~0 min"* ]]
+  [[ "$output" == *"│   └── #"* ]]
 
   # Outcome on the base branch
   grep -q "def subtract" src/calc.py
@@ -292,6 +349,22 @@ _run_flow() {  # <base-branch>
   step "archeflow-convergence.sh wiggum-check"
   [ "$status" -eq 0 ]
   jq -e '.wiggum_break == true' <<<"$output"
+}
+
+@test "e2e: findings that oscillate over three cycles make wiggum-check a hard break (logged)" {
+  _repo main
+  RUN_ID="2026-09-24-oscillate"
+  mkdir -p ".archeflow/artifacts/$RUN_ID"
+  emit run.start plan "" '{"task":"t","workflow":"thorough","max_cycles":3}'
+  local two='[{"id":"a.py:security","file":"a.py","category":"security","severity":"WARNING"},{"id":"b.py:testing","file":"b.py","category":"testing","severity":"WARNING"}]'
+  _findings 1 "$two"
+  _findings 2 '[{"id":"c.py:quality","file":"c.py","category":"quality","severity":"WARNING"}]'
+  _findings 3 "$two"
+  N=3
+  step "archeflow-convergence.sh wiggum-check"
+  [ "$status" -eq 0 ]
+  jq -e '.wiggum_break == true and .type == "hard" and (.triggers[0].reason | test("oscillate"))' <<<"$output"
+  jq -se 'last | .type == "wiggum.break" and .data.type == "hard"' ".archeflow/events/$RUN_ID.jsonl"
 }
 
 # --- lint: SKILL.md and this file must not diverge --------------------------------

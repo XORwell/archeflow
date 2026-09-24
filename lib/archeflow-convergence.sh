@@ -17,6 +17,10 @@ set -euo pipefail
 #              agent.timeout, decision what=post_merge_test chosen=revert, cost data)
 #   artifacts: .archeflow/artifacts/<run_id>/ (findings-cycle-*.json,
 #              convergence-cycle-*.json or cycle-*/convergence.json)
+# It includes the oscillation check: with findings files for three consecutive
+# cycles N-2, N-1, N (the last three), 2+ findings present in N-2, absent in N-1
+# and present again in N are a hard break. Called with a run ID, a break is also
+# logged as a wiggum.break event (data = the printed JSON).
 #
 # Exit codes: 0 = result (score computed, oscillation found, break triggered),
 #             1 = no oscillation / no break, 2 = usage or input error.
@@ -24,6 +28,8 @@ set -euo pipefail
 # Dependencies: jq, bash 4+
 
 command -v jq >/dev/null 2>&1 || { echo "Error: jq is required. Install: https://jqlang.github.io/jq/" >&2; exit 2; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     local code="${1:-2}"
@@ -123,6 +129,20 @@ compute_score() {
 # A finding is oscillating if present in cycle N-2, absent in N-1,
 # and present again in N.
 # ============================================================
+
+# oscillating_ids <cycle-n.json> <cycle-n-1.json> <cycle-n-2.json>: one id per line.
+oscillating_ids() {
+    local ids_n ids_n1 ids_n2 id
+    ids_n=$(jq -r '.[]?.id? | strings' "$1" 2>/dev/null | sort)
+    ids_n1=$(jq -r '.[]?.id? | strings' "$2" 2>/dev/null | sort)
+    ids_n2=$(jq -r '.[]?.id? | strings' "$3" 2>/dev/null | sort)
+    while IFS= read -r id; do
+        [[ -z "$id" ]] && continue
+        if ! grep -qxF -- "$id" <<<"$ids_n1" && grep -qxF -- "$id" <<<"$ids_n"; then
+            printf '%s\n' "$id"
+        fi
+    done <<< "$ids_n2"
+}
 
 detect_oscillation() {
     local cycle_n="$1"
@@ -263,6 +283,30 @@ wiggum_check() {
         fi
     fi
 
+    # Hard: 2+ oscillating findings over the last three cycles' findings files
+    # (findings-cycle-<N-2>.json, <N-1>, <N>; consecutive cycle numbers only).
+    if [[ -n "$run_dir" ]]; then
+        local osc_files osc_n=() f num
+        osc_files=$(find "$run_dir" -maxdepth 1 -name "findings-cycle-*.json" 2>/dev/null | sort -V | tail -3)
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            num="${f##*findings-cycle-}"; num="${num%.json}"
+            [[ "$num" =~ ^[0-9]+$ ]] && osc_n+=("$num")
+        done <<< "$osc_files"
+        if [[ ${#osc_n[@]} -eq 3 ]] \
+           && [[ "$((10#${osc_n[1]}))" -eq "$((10#${osc_n[0]} + 1))" && "$((10#${osc_n[2]}))" -eq "$((10#${osc_n[1]} + 1))" ]]; then
+            local osc
+            osc=$(oscillating_ids "$run_dir/findings-cycle-${osc_n[2]}.json" \
+                  "$run_dir/findings-cycle-${osc_n[1]}.json" "$run_dir/findings-cycle-${osc_n[0]}.json")
+            local osc_count
+            osc_count=$(printf '%s' "$osc" | grep -c . || true)
+            if [[ "$osc_count" -ge 2 ]]; then
+                breaks+=("hard|$osc_count findings oscillate across cycles ${osc_n[0]}-${osc_n[2]} ($(tr '\n' ' ' <<<"$osc" | sed 's/ $//'))")
+                break_type="hard"
+            fi
+        fi
+    fi
+
     # Hard: legacy marker file for a broken post-merge test suite
     if [[ -n "$run_dir" && -f "$run_dir/post-merge-test-result" ]]; then
         if [[ "$(cat "$run_dir/post-merge-test-result")" == "FAILED" ]]; then
@@ -352,17 +396,23 @@ wiggum_check() {
         return 1
     fi
 
-    local break_json
-    break_json=$(printf '%s\n' "${breaks[@]}" | jq -R 'split("|") | {type: .[0], reason: .[1]}' | jq -s .)
+    local break_json out
+    break_json=$(printf '%s\n' "${breaks[@]}" | jq -R 'index("|") as $i | {type: .[:$i], reason: .[$i + 1:]}' | jq -s .)
 
-    jq -n \
+    out=$(jq -n \
         --arg break_type "$break_type" \
         --argjson triggers "$break_json" \
         '{
             wiggum_break: true,
             type: $break_type,
             triggers: $triggers
-        }'
+        }')
+    echo "$out"
+
+    # Log the break when called with a run ID (a directory argument is not a run).
+    if [[ ! -d "$1" && -x "$SCRIPT_DIR/archeflow-event.sh" ]]; then
+        "$SCRIPT_DIR/archeflow-event.sh" "$1" wiggum.break act "" "$(jq -c . <<<"$out")" >/dev/null 2>&1 || true
+    fi
     return 0
 }
 

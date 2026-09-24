@@ -24,12 +24,12 @@ writing tasks.
    (`--autonomous`, "go autonomous"). The queue file cannot grant it: `mode: "PAUSED"` in the
    file is honoured, `mode: "AUTONOMOUS"` in the file is treated as `ATTENDED` (say so once).
 3. `last_maintained` missing or older than 3 days: run the scan (`archeflow:scan`) first. The
-   scan only **proposes** items; see Step 1.
+   scan only **proposes** items and never runs project code (no test suites); see Step 1.
 4. One status line: `sprint: ATTENDED | 7 pending (1xP0, 1xP2, 5xP3) | 2 proposed | 4 slots`
 
 | Mode | Dispatch | Between batches |
 |------|----------|-----------------|
-| `ATTENDED` | show the batch, wait for approval | show results, ask "Continue? [y/n/edit]" |
+| `ATTENDED` | show the batch with each item's full `task` text, wait for approval | show results, ask "Continue? [y/n/edit]" |
 | `AUTONOMOUS` | immediately | one status line, next batch; stop on BLOCKED, budget, or a Wiggum Break |
 | `PAUSED` | nothing | status only |
 

@@ -7,13 +7,15 @@
 # Contract:
 #   - Config comes from exactly ONE source (all four LANGFUSE_* values together):
 #       1. the environment, if LANGFUSE_ENABLED=true is set there; otherwise
-#       2. a langfuse.env file, first found of:
-#            <repo-root>/.archeflow/langfuse.env  (only if NOT tracked by git)
+#       2. a user-level langfuse.env file, first found of:
 #            ${XDG_CONFIG_HOME:-~/.config}/archeflow/langfuse.env
 #            ~/.archeflow/langfuse.env
-#     Parent directories are never searched, a git-tracked (i.e. repository-
-#     supplied) project file is refused, and a project file outside a git work
-#     tree is ignored. Values are parsed as data, never executed.
+#     Nothing inside the repository is ever read: a project-local
+#     .archeflow/langfuse.env could be supplied by the repository (committed,
+#     reached through a symlinked .archeflow/, or as a case variant such as
+#     LANGFUSE.env on a case-insensitive filesystem) and would send every run
+#     event to a host the repository chose. Values are parsed as data, never
+#     executed.
 #   - The host must be https://, or http:// on a loopback address.
 #   - If config is missing or LANGFUSE_ENABLED != "true", exit 0 silently.
 #   - curl failures are logged to <config-dir>/langfuse.errors.log but never propagate.
@@ -37,24 +39,13 @@ _ENV_PK="${LANGFUSE_PUBLIC_KEY:-}"
 _ENV_SK="${LANGFUSE_SECRET_KEY:-}"
 unset LANGFUSE_ENABLED LANGFUSE_HOST LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY
 
-# Locate langfuse.env. No walking up into ancestor directories: only the
-# current repository's own .archeflow/ (when the file is untracked, i.e. created
-# by the user rather than shipped by the repo), then the user-level locations.
+# Locate langfuse.env in the user's own configuration only. The working
+# directory (and so the repository) is never consulted.
 _find_langfuse_dir() {
-    local top
-    if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$top" ]]; then
-        local f="$top/.archeflow/langfuse.env"
-        if [[ -f "$f" ]]; then
-            if git -C "$top" ls-files --error-unmatch -- .archeflow/langfuse.env >/dev/null 2>&1; then
-                echo "[langfuse] refusing git-tracked .archeflow/langfuse.env (repository-supplied config); using user-level config only" >&2
-            else
-                printf '%s\n' "$top/.archeflow"; return 0
-            fi
-        fi
-    fi
-    local xdg="${XDG_CONFIG_HOME:-$HOME/.config}/archeflow"
-    [[ -f "$xdg/langfuse.env" ]] && { printf '%s\n' "$xdg"; return 0; }
-    [[ -f "$HOME/.archeflow/langfuse.env" ]] && { printf '%s\n' "$HOME/.archeflow"; return 0; }
+    local d
+    for d in "${XDG_CONFIG_HOME:-$HOME/.config}/archeflow" "$HOME/.archeflow"; do
+        [[ -f "$d/langfuse.env" ]] && { printf '%s\n' "$d"; return 0; }
+    done
     return 1
 }
 

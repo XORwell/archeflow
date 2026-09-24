@@ -16,6 +16,12 @@
 #   "2"   → single parent [2]
 #   "3,4" → multiple parents [3,4] (fan-in)
 #   ""    → root event []
+#   (omitted) → chosen automatically, so the DAG does not depend on the caller:
+#     run.start and the first event of a file: root [];
+#     agent.complete, agent.failed, agent.timeout, review.verdict, shadow.detected,
+#     decision.point of an agent: that agent's latest agent.start (if any);
+#     everything else (and agents without an agent.start): the latest
+#     run.start / phase.transition / cycle.boundary.
 #
 # Events are appended to .archeflow/events/<run_id>.jsonl
 # If the events directory doesn't exist, it is created automatically.
@@ -28,6 +34,8 @@ command -v jq >/dev/null 2>&1 || { echo "Error: jq is required but not installed
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/archeflow-common.sh
 source "${LIB_DIR}/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 
 if [[ $# -lt 4 ]]; then
   echo "Usage: $0 <run_id> <type> <phase> <agent> [json_data] [parent_seqs]" >&2
@@ -40,6 +48,8 @@ PHASE="$3"
 AGENT="$4"
 DATA="${5:-"{}"}"
 PARENT_RAW="${6:-}"
+PARENT_GIVEN=false
+[[ $# -ge 6 ]] && PARENT_GIVEN=true
 # Run IDs become file names under .archeflow/ (and git branch names).
 af_require_run_id "$RUN_ID"
 
@@ -54,8 +64,10 @@ if ! echo "$DATA" | jq empty 2>/dev/null; then
   exit 1
 fi
 
-# Build parent array from comma-separated seq numbers
-if [[ -z "$PARENT_RAW" ]]; then
+# Build parent array from comma-separated seq numbers (auto: after the lock)
+if [[ "$PARENT_GIVEN" == false ]]; then
+  PARENT_JSON=""
+elif [[ -z "$PARENT_RAW" ]]; then
   PARENT_JSON="[]"
 elif [[ "$PARENT_RAW" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
   PARENT_JSON="[${PARENT_RAW}]"
@@ -77,6 +89,26 @@ if [[ -f "$EVENT_FILE" ]]; then
   SEQ=$(( $(wc -l < "$EVENT_FILE") + 1 ))
 else
   SEQ=1
+fi
+
+# Automatic parent (see header). The event file is data: only integer seqs
+# of well-formed events are used.
+if [[ -z "$PARENT_JSON" ]]; then
+  PARENT_JSON="[]"
+  if [[ "$TYPE" != "run.start" && -s "$EVENT_FILE" ]]; then
+    PARENT_JSON=$(jq -cs --arg t "$TYPE" --arg a "$AGENT" '
+      def isint: type == "number" and . >= 1 and . == floor and . < 1e15;
+      [ .[] | select(type == "object" and (.seq | isint)) ] as $ev
+      | ([ $ev[] | select(.type == "run.start" or .type == "phase.transition" or .type == "cycle.boundary") ]
+         | last | .seq) as $anchor
+      | (if $a != "" and ($t == "agent.complete" or $t == "agent.failed" or $t == "agent.timeout"
+                          or $t == "review.verdict" or $t == "shadow.detected" or $t == "decision.point")
+         then ([ $ev[] | select(.type == "agent.start" and .agent == $a) ] | last | .seq)
+         else null end) as $own
+      | [ ($own // $anchor // ($ev | last | .seq)) | select(. != null) ]
+    ' "$EVENT_FILE" 2>/dev/null) || PARENT_JSON="[]"
+    [[ "$PARENT_JSON" =~ ^\[[0-9]*\]$ ]] || PARENT_JSON="[]"
+  fi
 fi
 
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)

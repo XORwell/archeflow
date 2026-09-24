@@ -103,7 +103,10 @@ In any git repository with uncommitted changes, or on a branch:
 
 The Guardian (security, error paths, data loss) reviews by default; add the other reviewers with
 `--reviewers`. Each finding has a severity (CRITICAL, WARNING, INFO), a file and line, and a
-suggested fix. Review mode does not change your code.
+suggested fix. Review mode does not change your code, and new untracked files are part of the
+reviewed changes (ignored files are not). Reviewers only read the code (read-only tools) and do
+not run the changed code or its tests without your explicit confirmation; review untrusted
+branches in a sandbox or with a permission mode that asks before Bash.
 
 ### 2. Run a task through the full cycle
 
@@ -113,8 +116,9 @@ Set up the project once with one of the three bundles:
 /archeflow:init quick-fix          # or backend-feature, security-review; no argument lists them
 ```
 
-This writes `.archeflow/config.yaml`, a team, a workflow and a domain file, and a
-`.archeflow/.gitignore` for runtime state. It also asks for your test command (for example
+This writes `.archeflow/config.yaml` (with the bundle's workflow and budget), a team, a workflow
+and a domain file, and a `.archeflow/.gitignore` that keeps run state (events, artifacts, run
+metadata, worktrees, memory) out of your commits. It also asks for your test command (for example
 `npm test`); if you give one, it runs after every ArcheFlow merge. The same from a shell:
 `<plugin dir>/lib/archeflow-init.sh quick-fix`.
 
@@ -129,7 +133,8 @@ What happens (the roles are explained under Core concepts): the run creates a br
 `archeflow/<run_id>`. The Creator writes a proposal, the Maker implements it in a separate git worktree, its commits are brought into the run branch, and
 the Guardian reviews the diff. The Act step then either sends findings back for another cycle,
 stops and reports, or, when the reviewers approve, **asks you** whether to merge the run branch
-into the branch you started from (set `git.auto_merge: true` to skip the question). Afterwards:
+into the branch you started from (set `git.auto_merge: true` to skip the question). Until the run
+is merged, your checkout stays on the run branch. Afterwards:
 
 ```
 /archeflow:status     # task, phase, cycle, findings of the current or last run
@@ -150,7 +155,7 @@ vocabulary; they are labels for role specifications, not a psychological model.
 |------|-------|-----|--------------------|------------------------------|
 | Explorer | Plan | Researches the codebase and context | Rabbit Hole | More than 2000 words without a recommendation section |
 | Creator | Plan | Designs the solution and the test strategy | Over-Architect | More than 2 new abstractions, or more than one new dependency |
-| Maker | Do | Implements the proposal in a git worktree | Rogue | 3 or more files changed with no test file, or no evidence that tests ran |
+| Maker | Do | Implements the proposal in a git worktree | Rogue | 3 or more code files changed with no test file, or 10+ changed code lines and no evidence in its report that tests ran (documentation changes do not count) |
 | Guardian | Check | Security, reliability, breaking changes | Paranoid | 3 or more CRITICAL findings and more than twice as many CRITICALs as WARNINGs |
 | Skeptic | Check | Challenges assumptions, proposes alternatives | Paralytic | More than 7 challenges, fewer than half with an alternative |
 | Trickster | Check | Adversarial input, edge cases | False Alarm | Findings about files the change did not touch |
@@ -181,9 +186,14 @@ Three built-in workflows set the team and the number of cycles:
 | `standard` | Explorer, Creator | Guardian, Skeptic, Sage | 2 |
 | `thorough` | Explorer, Creator | Guardian, Skeptic, Sage, Trickster | 3 |
 
-The Do phase is always the Maker. If you do not pass `--workflow`, the run picks one from the
-task. A `fast` run in which the Guardian reports two or more CRITICAL findings is upgraded to
-`standard` for the next cycle.
+The Do phase is always the Maker. If you do not pass `--workflow`, the run uses `workflow:` from
+`.archeflow/config.yaml`, else picks one from the task. A `fast` run in which the Guardian reports
+two or more CRITICAL findings is upgraded to `standard` for the next cycle.
+
+The cycle limits decide which multi-cycle checks can take effect: convergence between cycles is
+scored from cycle 2, and oscillating findings or a low convergence score twice in a row need three
+cycles. In `fast` none of these run; in `standard` and `thorough` they can only fire at the last
+cycle, where they change the reported reason for stopping rather than the outcome.
 
 ### Wiggum Break
 
@@ -193,10 +203,11 @@ breaker. When a run stops making progress, ArcheFlow halts, records why, and han
 to you instead of spending more cycles.
 
 Hard breaks stop at once, for example three agent failures in a row, the same failure mode three
-times in one cycle, or a failing test suite after a merge. Soft breaks let the current step
-finish first, for example when two cycles in a row produce the same findings, when the
-convergence score stays low, or when more than 95% of the budget is spent. The check is
-`lib/archeflow-convergence.sh wiggum-check <run_id>`; the thresholds are listed in the
+times in one cycle, two or more findings that disappear and come back (oscillation), or a failing
+test suite after a merge. Soft breaks let the current step finish first, for example when two
+cycles in a row produce the same findings, when the convergence score stays low, or when more
+than 95% of the budget is spent. The check is `lib/archeflow-convergence.sh wiggum-check
+<run_id>`, which also logs the break in the event log; the thresholds are listed in the
 `shadow-detection` skill.
 
 ## Commands
@@ -227,7 +238,7 @@ In your project:
 |------|----------|
 | `.archeflow/config.yaml`, `teams/`, `workflows/`, `domains/` | Configuration written by `/archeflow:init` |
 | `.archeflow/events/<run_id>.jsonl` | Event log of each run, one JSON object per line |
-| `.archeflow/events/index.jsonl` | One line per finished run |
+| `.archeflow/events/index.jsonl` | One line per finished run (a merge approved later adds a line; the last one counts) |
 | `.archeflow/artifacts/<run_id>/` | Proposals, reviews and other agent output |
 | `.archeflow/memory/lessons.jsonl` | Lessons carried across runs |
 | `.archeflow/progress.md` | Progress snapshot, written when you run `lib/archeflow-progress.sh <run_id> [--watch]` (for example from a second terminal) |
@@ -235,11 +246,14 @@ In your project:
 
 In git: a branch `archeflow/<run_id>` per run (prefix configurable under `git:` in
 `config.yaml`) and, while the Maker works, a worktree on `archeflow/<run_id>-maker`. After a
-merge you approved and passing tests, the run branch is deleted; artifacts and events stay.
-A run commits nothing under `.archeflow/` (unless `git.commit_artifacts: true`) and pushes
-nothing (unless `git.auto_push: true`).
+merge you approved and passing tests, the run branch is deleted; artifacts and events stay. The
+merge commit is titled `archeflow: merge run <run_id>`. A run commits nothing under
+`.archeflow/` and pushes nothing (unless `git.auto_push: true`).
 
-Configuration you may want to commit; runtime state (events, artifacts, locks) usually not. Treat
+Commit the configuration (`config.yaml`, `hooks.yaml`, `teams/`, `workflows/`, `domains/`,
+`lenses/`) if you want to share it. Run state is local by default: the `.archeflow/.gitignore`
+written by `/archeflow:init` ignores `events/`, `artifacts/`, `runs/`, `worktrees/`, `memory/`,
+review diffs, `progress.md`, locks and `langfuse.env`. Treat
 a committed `.archeflow/` from someone else's repository as untrusted: `test_command` and hook
 commands are executed, and lenses decide which files are put into prompts (see
 [SECURITY.md](SECURITY.md)).

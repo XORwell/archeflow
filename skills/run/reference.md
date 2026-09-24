@@ -7,28 +7,35 @@ file covers optional features, the event schema and the artifact list.
 
 Emit with `<archeflow-root>/lib/archeflow-event.sh <run_id> <type> <phase> <agent> "$(cat .archeflow/artifacts/<run_id>/event.json)" [parent_seqs]`,
 after writing the `data` object to `event.json` with your file tool. `<agent>` is the role name or `""`.
-The script prints nothing on success; the event's `seq` is the line count of
+The script prints `#<seq>` to stderr; the event's `seq` is the line count of
 `.archeflow/events/<run_id>.jsonl`.
 
-| When | Type | Data |
-|------|------|------|
-| Run starts | `run.start` | task, workflow, max_cycles, lenses, patterns, model_provider |
-| Before an agent | `agent.start` | archetype, model, prompt_summary |
-| After an agent | `agent.complete` | archetype, duration_ms, artifacts, summary, estimated_cost_usd |
-| Agent did not return | `agent.failed` / `agent.timeout` | archetype, reason |
-| Phase boundary | `phase.transition` | from, to |
-| Choice between alternatives | `decision` | what, chosen, alternatives, rationale |
-| Orchestrator decision (for replay) | `decision.point` | archetype, input, decision, confidence |
-| Reviewer verdict | `review.verdict` | archetype, verdict, findings[] (location, severity, category, description) |
-| Fix verified in a later cycle | `fix.applied` | source, finding, file, line |
-| End of a cycle | `cycle.boundary` | cycle, max_cycles, exit_condition, convergence |
-| Failure mode found | `shadow.detected` | written by `archeflow-shadow.sh detect --run-id` |
-| Circuit breaker | `wiggum.break` | the JSON printed by `wiggum-check` |
-| Run ends | `run.complete` | status, cycles, agents_total, fixes_total |
+This table is the schema `archeflow-report.sh`, `archeflow-dag.sh`, `archeflow-score.sh`,
+`/archeflow:replay` and the system checks read. **Required** rows must be emitted in every run.
 
-Parents: `run.start` has none. An agent's events point to the event that started it; a phase
-transition points to all events that completed the phase; parallel agents share a parent.
-`archeflow-dag.sh` renders events without parents at the root.
+| When | Type | Data | |
+|------|------|------|---|
+| Run starts | `run.start` | task, workflow, max_cycles, team (list of roles), lenses, patterns, model_provider | required |
+| Before an agent | `agent.start` | archetype, model, prompt_summary | required |
+| After an agent | `agent.complete` | archetype, duration_ms, artifacts (paths), summary, estimated_cost_usd | required |
+| Agent did not return | `agent.failed` / `agent.timeout` | archetype, reason | required |
+| Reviewer verdict (after the evidence gate) | `review.verdict` | archetype, verdict (`APPROVED`/`REJECTED`), findings[] (location, severity, category, description) | required |
+| End of a cycle | `cycle.boundary` | cycle, max_cycles, exit_condition (`approved`, `findings_open`, `max_cycles`, `escalated`, `wiggum_break`), decision (`merge`, `cycle_back`, `stop`, `escalate`), critical, warning, info, convergence | required |
+| Run ends | `run.complete` | status (`merged`, `awaiting_merge`, `stopped`, `wiggum_break`, `failed`), cycles, agents_total, fixes_total, duration_ms (optional: else computed from the timestamps) | required |
+| Merge approved after `awaiting_merge` | `run.merged` | base, strategy | when it happens |
+| Phase boundary | `phase.transition` | from, to | optional |
+| Choice between alternatives | `decision` | what, chosen, alternatives, rationale | optional |
+| Orchestrator decision (for replay) | `decision.point` | archetype, input, decision, confidence | optional |
+| Fix verified in a later cycle | `fix.applied` | source, finding, file, line | when it happens |
+| Failure mode found | `shadow.detected` | written by `archeflow-shadow.sh` (`detect --run-id`, `check-system <run_id>`) | automatic |
+| Circuit breaker | `wiggum.break` | written by `archeflow-convergence.sh wiggum-check <run_id>` (its printed JSON) | automatic |
+
+Parents: leave `parent_seqs` out and the script sets them: `run.start` is the root; an agent's
+`agent.complete`, `agent.failed`, `agent.timeout`, `review.verdict`, `shadow.detected` and
+`decision.point` point to that agent's latest `agent.start`; everything else points to the latest
+`run.start`, `phase.transition` or `cycle.boundary`. Pass `parent_seqs` (comma-separated) only to
+override this, `""` for an explicit root. `archeflow-dag.sh` shows structural events
+(`phase.transition`, `cycle.boundary`, `run.complete`) and events without a known parent under the root.
 
 ## Artifacts (`.archeflow/artifacts/<run_id>/`)
 
@@ -44,17 +51,20 @@ transition points to all events that completed the phase; parallel agents share 
 | `check-<role>.md` | reviewers | verdict and findings |
 | `findings-cycle-<N>.json` | orchestrator (Act) | consolidated findings of cycle N |
 | `convergence-cycle-<N>.json` | `archeflow-convergence.sh score` | convergence of cycle N vs N-1 |
-| `act-feedback.md` | orchestrator (Act) | routed issues for the next cycle |
+| `act-feedback.md` | orchestrator (Act) | routed issues for the next cycle (stays at the top level until the next Act) |
 | `lens-config.json` | `archeflow-lens.sh merge` | merged lenses (only with lenses) |
-| `cycle-<N>/` | orchestrator | archived plan/do/check/act files of cycle N |
+| `cycle-<N>/` | orchestrator | cycle N as it was: copies of `plan-*.md` and `act-feedback.md`, the moved `do-*` and `check-*` files |
 
 Run metadata (base branch) is in `.archeflow/runs/<run_id>/`, the Maker's worktree in
-`.archeflow/worktrees/<run_id>/` (ignored by git), events in `.archeflow/events/<run_id>.jsonl`.
-None of these are committed unless you set `git.commit_artifacts` (see `archeflow:git-integration`).
+`.archeflow/worktrees/<run_id>/`, events in `.archeflow/events/<run_id>.jsonl`. None of these are
+committed: the `.archeflow/.gitignore` that `/archeflow:init` writes keeps them local.
 
 ## Lenses
 
-With `--lens <name>` flags or `lenses:` in the config, before Plan:
+Before Plan, with `lenses:` in the config:
+`<archeflow-root>/lib/archeflow-lens.sh merge --from-config > .archeflow/artifacts/<run_id>/lens-config.json`
+(the script reads and validates the names itself). With `--lens <name>` flags typed by the user,
+each name must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` (refuse the run otherwise):
 `<archeflow-root>/lib/archeflow-lens.sh merge <lens1> [<lens2>...] > .archeflow/artifacts/<run_id>/lens-config.json`
 
 Apply the merged config to every agent spawn (schema: `<archeflow-root>/lenses/SCHEMA.md`):
@@ -82,12 +92,12 @@ With `--pattern <phase>:<name>` or `patterns:` in the config (definitions in
 
 ## Local models (Ollama)
 
-If `models.provider: ollama` or `ARCHEFLOW_MODEL_PROVIDER=ollama`: map haiku/sonnet/opus through
-`models.mapping` (defaults `qwen3:8b`, `qwen3:14b`, `qwen3:14b`), export
-`ARCHEFLOW_OLLAMA_BASE_URL` from `models.ollama.base_url` if set, and check
-`<archeflow-root>/lib/archeflow-ollama.sh health` before the run. For each role, write the user
-content to a file and run
-`<archeflow-root>/lib/archeflow-ollama.sh chat <ollama-tag> --system-file <archeflow-root>/agents/<role>.md < <input-file> > .archeflow/artifacts/<run_id>/<artifact>.md`.
+If `models.provider: ollama` or `ARCHEFLOW_MODEL_PROVIDER=ollama`: check
+`<archeflow-root>/lib/archeflow-ollama.sh health` before the run (the script reads
+`models.ollama.base_url` from the config itself). For each role, pick its tier (haiku, sonnet or
+opus; the script maps it through `models.mapping`, defaults `qwen3:8b`, `qwen3:14b`,
+`qwen3:14b`), write the user content to a file and run
+`<archeflow-root>/lib/archeflow-ollama.sh chat --tier <tier> --system-file <archeflow-root>/agents/<role>.md < <input-file> > .archeflow/artifacts/<run_id>/<artifact>.md`.
 Append `STATUS: DONE` if the output is complete but has no status line. Local runs cannot spawn
 the Maker as an agent with tools: use the host's own agent for the Maker.
 

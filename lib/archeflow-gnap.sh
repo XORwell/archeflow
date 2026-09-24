@@ -27,6 +27,8 @@ command -v jq >/dev/null 2>&1 || { echo "Error: jq required" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/archeflow-common.sh
 source "${SCRIPT_DIR}/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 GNAP_DIR=".gnap"
 QUEUE_FILE="docs/orchestra/queue.json"
 ARCHEFLOW_DIR=".archeflow"

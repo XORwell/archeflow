@@ -142,3 +142,27 @@ teardown() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"Base branch 'no-such-base' not found"* ]]
 }
+
+@test "review: a new untracked file is reviewed (regression: 'No changes found')" {
+  printf 'def f():\n    return 1\n' > newfile.py
+  run "$LIB_DIR/archeflow-review.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"diff --git a/newfile.py b/newfile.py"* ]]
+  [[ "$output" == *"new file mode"* ]]
+  [[ "$output" == *"+    return 1"* ]]
+}
+
+@test "review: untracked files come after tracked changes; ignored files and .archeflow/ are left out" {
+  echo "changed" >> README.md
+  echo "secret" > local.env
+  echo "local.env" > .gitignore
+  git add .gitignore && git commit -q -m "ignore"
+  mkdir -p .archeflow && echo "old diff" > .archeflow/review.diff
+  echo "x = 1" > "with space.py"
+  run "$LIB_DIR/archeflow-review.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"README.md"*"with space.py"* ]]
+  [[ "$output" != *"local.env"* ]]
+  [[ "$output" != *"review.diff"* ]]
+  [[ "$output" == *"Files changed:  2"* ]]
+}

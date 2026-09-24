@@ -17,6 +17,8 @@ set -euo pipefail
 
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <command> [args...]" >&2

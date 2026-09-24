@@ -1,6 +1,6 @@
-# Tests for archeflow-rollback.sh — post-merge test and phase rollback.
+# Tests for archeflow-rollback.sh — post-merge tests and auto-revert of a run's merge.
 #
-# Validates: argument parsing, mutual exclusivity, phase validation, test-cmd config reading.
+# Validates: argument parsing, test-cmd config reading, which merge commits may be reverted.
 
 setup() {
   load test_helper
@@ -16,23 +16,17 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
-@test "rollback: rejects mutually exclusive --to and --test-cmd" {
-  run "$LIB_DIR/archeflow-rollback.sh" test-run --to plan --test-cmd "true"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"mutually exclusive"* ]]
-}
-
-@test "rollback: rejects invalid phase names" {
-  run "$LIB_DIR/archeflow-rollback.sh" test-run --to invalid-phase
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"Invalid phase"* ]]
-}
-
-@test "rollback: accepts valid phase names (plan, do, check)" {
-  # This will fail because no git branch exists, but should NOT fail on phase validation
+@test "rollback: the removed --to mode exits 2 with a pointer, nothing runs" {
   run "$LIB_DIR/archeflow-rollback.sh" test-run --to plan
-  # Should fail later (archeflow-git.sh rollback) not on phase validation
-  [[ "$output" != *"Invalid phase"* ]]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--to was removed"* ]]
+  [[ "$output" == *"archeflow-git.sh rollback"* ]]
+}
+
+@test "rollback: --test-cmd without a value exits 2 (no unbound-variable crash)" {
+  run "$LIB_DIR/archeflow-rollback.sh" test-run --test-cmd
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs a command"* ]]
 }
 
 @test "rollback: exits 2 when no test command available" {
@@ -115,4 +109,40 @@ squash_merge_run() {
   run "$LIB_DIR/archeflow-rollback.sh" r5 --test-cmd "true"
   [ "$status" -eq 0 ]
   [ -f feature.txt ]
+}
+
+@test "rollback: failing tests revert a merge with the neutral subject 'archeflow: merge run <id>'" {
+  git checkout --quiet -b archeflow/r6
+  echo feature > feature.txt
+  git add feature.txt && git commit --quiet -m "do: feature"
+  git checkout --quiet main
+  git merge --no-ff --quiet -m "archeflow: merge run r6" archeflow/r6
+  run "$LIB_DIR/archeflow-rollback.sh" r6 --test-cmd "false"
+  [ "$status" -eq 1 ]
+  [ ! -f feature.txt ]
+}
+
+@test "rollback: a neutral merge subject of another run is not reverted" {
+  git checkout --quiet -b archeflow/r7x
+  echo feature > feature.txt
+  git add feature.txt && git commit --quiet -m "do: feature"
+  git checkout --quiet main
+  git merge --no-ff --quiet -m "archeflow: merge run r7x" archeflow/r7x
+  run "$LIB_DIR/archeflow-rollback.sh" r7 --test-cmd "false"
+  [ "$status" -eq 3 ]
+  [ -f feature.txt ]
+}
+
+@test "rollback: a test command that is not found (127) or not executable (126) exits 2, nothing reverted" {
+  squash_merge_run r8
+  head_before=$(git rev-parse HEAD)
+  run "$LIB_DIR/archeflow-rollback.sh" r8 --test-cmd "no-such-test-runner-xyz"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"configuration problem, nothing reverted"* ]]
+  [ "$(git rev-parse HEAD)" = "$head_before" ]
+  [ -f feature.txt ]
+  printf 'echo hi\n' > notexec.sh; chmod -x notexec.sh
+  run "$LIB_DIR/archeflow-rollback.sh" r8 --test-cmd "./notexec.sh"
+  [ "$status" -eq 2 ]
+  [ "$(git rev-parse HEAD)" = "$head_before" ]
 }

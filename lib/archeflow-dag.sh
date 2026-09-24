@@ -61,12 +61,11 @@ if [[ "$USE_COLOR" == "yes" ]]; then
   C_CHECK="\033[1;33m"     # yellow for check phase
   C_ACT="\033[1;35m"       # magenta for act phase
   C_TRANS="\033[0;36m"     # cyan for phase transitions
-  C_DIM="\033[0;90m"       # dim for metadata
   C_DECISION="\033[1;33m"  # yellow for decisions
   C_VERDICT="\033[1;31m"   # red for verdicts
 else
   C_RESET="" C_SEQ="" C_PLAN="" C_DO="" C_CHECK="" C_ACT=""
-  C_TRANS="" C_DIM="" C_DECISION="" C_VERDICT=""
+  C_TRANS="" C_DECISION="" C_VERDICT=""
 fi
 
 phase_color() {
@@ -100,9 +99,15 @@ EVENTS_PARSED=$(jq -r '
       ((.data.verdict // "unknown") | ascii_upcase | gsub("_"; " "))
     elif .type == "fix.applied" then
       "fix (" + (.data.source // "unknown") + "): " + (.data.finding // "unknown")
+    elif .type == "agent.start" then
+      (.data.archetype // .agent // "unknown") + " started (" + .phase + ")"
     elif .type == "cycle.boundary" then
       "cycle " + ((.data.cycle // 0) | tostring) + "/" + ((.data.max_cycles // 0) | tostring) +
-      " → " + (.data.next_action // "continue")
+      " → " + ((.data.decision // .data.next_action // "continue") | tostring)
+    elif .type == "wiggum.break" then
+      "wiggum break (" + ((.data.type // "?") | tostring) + ")"
+    elif .type == "run.merged" then
+      "merged into " + ((.data.base // "base") | tostring)
     elif .type == "shadow.detected" then
       "shadow: " + (.data.archetype // "unknown") + " — " + (.data.shadow // "unknown")
     elif .type == "run.complete" then
@@ -157,26 +162,34 @@ for key in "${!CHILDREN_OF[@]}"; do
 done
 
 # Determine display parent for each event.
-# Strategy: structural events (phase.transition, cycle.boundary, run.complete) are promoted
-# to be direct children of #1 (run.start), creating a flat timeline backbone.
-# All other events use their first (lowest-numbered) parent for display.
+# Strategy: the tree root is the first run.start (else the lowest seq). Structural
+# events (phase.transition, cycle.boundary, run.complete) are promoted to be direct
+# children of the root, creating a flat timeline backbone. Other events without a
+# parent, or whose parent is not in the file, also hang under the root, so no event
+# is dropped from the rendering. All other events use their first (lowest) parent.
 declare -A DISPLAY_PARENT  # seq -> parent seq for display (0 = root)
 declare -A DISPLAY_CHILDREN  # parent -> ordered children for display
+
+ROOT=""
+for seq_i in $(printf '%s\n' "${!EVENT_TYPE[@]}" | sort -n); do
+  if [[ "${EVENT_TYPE[$seq_i]}" == "run.start" ]]; then ROOT="$seq_i"; break; fi
+done
+[[ -n "$ROOT" ]] || ROOT=$(printf '%s\n' "${!EVENT_TYPE[@]}" | sort -n | head -1)
 
 for seq_i in $(printf '%s\n' "${!EVENT_TYPE[@]}" | sort -n); do
   local_type="${EVENT_TYPE[$seq_i]}"
   parents_csv="${EVENT_PARENTS[$seq_i]:-}"
+  first_parent="${parents_csv%%,*}"
 
-  if [[ -z "$parents_csv" ]]; then
-    # Root event (run.start)
+  if [[ "$seq_i" == "$ROOT" ]]; then
     DISPLAY_PARENT[$seq_i]=0
-  elif [[ "$local_type" == "phase.transition" || "$local_type" == "cycle.boundary" || "$local_type" == "run.complete" ]]; then
-    # Promote structural events to be children of run.start (#1)
-    DISPLAY_PARENT[$seq_i]=1
+  elif [[ -z "$parents_csv" || "$local_type" == "phase.transition" || "$local_type" == "cycle.boundary" \
+          || "$local_type" == "run.complete" || -z "${EVENT_TYPE[$first_parent]:-}" \
+          || "$first_parent" -ge "$seq_i" ]]; then
+    # Backbone: structural events, parentless events, unknown or forward parents
+    DISPLAY_PARENT[$seq_i]="$ROOT"
   else
-    # Use first (lowest) parent as display parent
-    IFS=',' read -ra parr <<< "$parents_csv"
-    DISPLAY_PARENT[$seq_i]="${parr[0]}"
+    DISPLAY_PARENT[$seq_i]="$first_parent"
   fi
 
   dp="${DISPLAY_PARENT[$seq_i]}"
@@ -206,7 +219,7 @@ render_node() {
 
   # Connector
   local connector
-  if [[ -z "$prefix" && "$seq" == "1" ]]; then
+  if [[ -z "$prefix" && "$seq" == "$ROOT" ]]; then
     connector=""
   elif [[ "$is_last" == "true" ]]; then
     connector="└── "
@@ -223,8 +236,8 @@ render_node() {
     *)                colored_label="${pc}${label}${C_RESET}" ;;
   esac
 
-  if [[ "$seq" == "1" ]]; then
-    printf "%b\n" "${C_SEQ}#1${C_RESET}  ${colored_label}"
+  if [[ "$seq" == "$ROOT" ]]; then
+    printf "%b\n" "${C_SEQ}#${seq}${C_RESET}  ${colored_label}"
   else
     printf "%b\n" "${prefix}${connector}${C_SEQ}${seq_str}${C_RESET}${colored_label}"
   fi
@@ -248,7 +261,7 @@ render_node() {
     fi
 
     local child_prefix
-    if [[ "$seq" == "1" ]]; then
+    if [[ "$seq" == "$ROOT" ]]; then
       child_prefix=""
     elif [[ "$is_last" == "true" ]]; then
       child_prefix="${prefix}    "
@@ -260,12 +273,9 @@ render_node() {
   done
 }
 
-# Find root nodes (display parent == 0 means top-level)
-root_children="${DISPLAY_CHILDREN[0]:-}"
-if [[ -z "$root_children" ]]; then
+if [[ -z "$ROOT" ]]; then
   echo "No events found." >&2
   exit 1
 fi
 
-# The first root child should be #1 (run.start), render from there
-render_node 1 "" "true"
+render_node "$ROOT" "" "true"

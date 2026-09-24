@@ -187,3 +187,61 @@ YAML
   [ "$status" -eq 0 ]
   [[ "$output" == *"Budget >95% spent"* ]]
 }
+
+@test "init: the generated .gitignore keeps run state local and the configuration trackable" {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  run "$LIB_DIR/archeflow-init.sh" quick-fix
+  [ "$status" -eq 0 ]
+  local r
+  for r in events/ artifacts/ runs/ worktrees/ memory/ 'review*.diff' progress.md agent-card.json; do
+    grep -qxF -- "$r" .archeflow/.gitignore || { echo "missing rule: $r"; return 1; }
+  done
+  # what a run leaves behind is ignored ...
+  mkdir -p .archeflow/events .archeflow/artifacts/r1 .archeflow/runs/r1 .archeflow/worktrees/r1 .archeflow/memory
+  touch .archeflow/events/r1.jsonl .archeflow/events/index.jsonl .archeflow/artifacts/r1/check-guardian.md \
+    .archeflow/runs/r1/base-branch .archeflow/memory/lessons.jsonl .archeflow/review.diff .archeflow/progress.md
+  local untracked
+  untracked="$(git status --porcelain --untracked-files=all -- .archeflow)"
+  [[ "$untracked" != *"events/"* && "$untracked" != *"artifacts/"* && "$untracked" != *"runs/"* ]]
+  [[ "$untracked" != *"memory/"* && "$untracked" != *"review.diff"* && "$untracked" != *"progress.md"* ]]
+  # ... the configuration is not
+  [[ "$untracked" == *".archeflow/config.yaml"* ]]
+  [[ "$untracked" == *".archeflow/.gitignore"* ]]
+  [[ "$untracked" == *".archeflow/teams/"* ]]
+}
+
+@test "init: each bundle writes its workflow into .archeflow/config.yaml" {
+  export HOME="$BATS_TEST_TMPDIR/home"
+  local pair b wf
+  for pair in quick-fix:fast backend-feature:standard security-review:thorough; do
+    b="${pair%%:*}"; wf="${pair#*:}"
+    rm -rf .archeflow
+    run "$LIB_DIR/archeflow-init.sh" "$b"
+    [ "$status" -eq 0 ]
+    grep -qx "workflow: $wf" .archeflow/config.yaml || { echo "$b: no workflow: $wf"; cat .archeflow/config.yaml; return 1; }
+  done
+}
+
+# The shipped example config and the bundles must match docs/configuration.md.
+@test "shipped config: .archeflow/config.yaml has the current version and the documented defaults" {
+  local cfg="$LIB_DIR/../.archeflow/config.yaml"
+  grep -qF "version: \"$("$LIB_DIR/archeflow-version.sh")\"" "$cfg"
+  grep -qE '^  merge_strategy: no-ff([[:space:]]|$)' "$cfg"
+  grep -qE '^  auto_merge: false([[:space:]]|$)' "$cfg"
+  # hooks live in .archeflow/hooks.yaml, never in config.yaml
+  ! grep -qE '^[[:space:]#]*hooks:' "$cfg"
+  ! grep -qE 'phase-complete|agent-complete' "$cfg"
+}
+
+@test "shipped bundles: no hooks block, no squash default, documented models schema" {
+  local d="$LIB_DIR/../templates/bundles"
+  ! grep -rqE '^hooks:|pre_plan|post_check|post_act' "$d"
+  ! grep -rqE '^[[:space:]]*merge_strategy:[[:space:]]*squash' "$d"
+  ! grep -rqE 'warn_at_pct' "$d"
+  local c
+  for c in "$d"/*/config.yaml; do
+    # models.<role> directly under models: is not the documented schema (models.archetypes.<role>)
+    ! awk '/^models:/{m=1;next} m && /^[^ ]/{m=0} m && /^  (explorer|creator|maker|guardian|skeptic|sage|trickster):/{f=1} END{exit !f}' "$c" \
+      || { echo "flat models in $c"; return 1; }
+  done
+}

@@ -22,6 +22,8 @@ command -v jq >/dev/null 2>&1 || { echo "Error: jq is required but not installed
 
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 
 MEMORY_DIR=".archeflow/memory"
 LESSONS_FILE="${MEMORY_DIR}/lessons.jsonl"

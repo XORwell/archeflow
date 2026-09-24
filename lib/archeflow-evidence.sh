@@ -5,6 +5,11 @@
 #
 # Usage:
 #   archeflow-evidence.sh validate <review-file>  (rewrites downgraded severities to INFO in place)
+#
+# validate keeps the original next to it as <review-file>.orig, marks each
+# rewritten severity as "INFO (downgraded: <reason>; original in <name>.orig)", keeps the
+# file's mode, and, for a run artifact (.archeflow/artifacts/<run_id>/check-<role>.md),
+# logs one "evidence.downgrade" event per downgrade (from, reason, line, role).
 #   archeflow-evidence.sh scan <review-file>      (dry-run, report only)
 #
 # Recognised finding formats:
@@ -25,6 +30,8 @@ set -euo pipefail
 
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 
 usage() {
     echo "Usage: archeflow-evidence.sh validate|scan <review-file>" >&2
@@ -125,6 +132,8 @@ TOTAL=0
 DOWNGRADES=0
 REWRITE_IDX=()     # line indices to rewrite
 REWRITE_HOW=()     # "cell:<n>:<token>" or "tok:<token>"
+REWRITE_SEV=()     # original severity of each rewrite
+REWRITE_WHY=()     # reason of each rewrite
 CUR_KIND=""        # "" | line | block
 CUR_SEV=""
 CUR_TOKEN=""
@@ -144,6 +153,8 @@ evaluate() {
         echo "  DOWNGRADE: $sev → INFO ($reason) [line $((idx + 1))]"
         REWRITE_IDX+=("$idx")
         REWRITE_HOW+=("$how")
+        REWRITE_SEV+=("$sev")
+        REWRITE_WHY+=("$reason")
     fi
 }
 
@@ -174,6 +185,8 @@ table_row() {
 
     if [[ "$TABLE_SEV_COL" -ge 0 ]]; then
         v=$(cell_value "${cells[$TABLE_SEV_COL]:-}")
+        # "INFO (downgraded: ...)" written by an earlier validate
+        [[ "$v" =~ ^(CRITICAL|WARNING|INFO)[[:space:]]*\( ]] && v="${BASH_REMATCH[1]}"
         [[ "$v" == CRITICAL || "$v" == WARNING || "$v" == INFO ]] && { col=$TABLE_SEV_COL; sev="$v"; }
     else
         for i in "${!cells[@]}"; do
@@ -252,24 +265,29 @@ process_review() {
     [[ "$DOWNGRADES" -gt 0 ]]
 }
 
-# Replace the severity of every downgraded finding with INFO, atomically.
+# Replace the severity of every downgraded finding with an annotated INFO,
+# atomically, after saving the original as <file>.orig.
 rewrite_file() {
-    local file="$1" i idx how col token line out
+    local file="$1" i idx how col token line out mark
     local -a cells
 
-    af_refuse_symlink "$file" || exit 1
+    af_refuse_symlink "$file" && af_refuse_symlink "${file}.orig" || exit 1
 
     for i in "${!REWRITE_IDX[@]}"; do
         idx="${REWRITE_IDX[$i]}"
         how="${REWRITE_HOW[$i]}"
         line="${LINES[$idx]}"
+        # The original severity is kept in <file>.orig and in the event, not
+        # here: a "CRITICAL" in an INFO line would count as an open CRITICAL
+        # for the failure-mode heuristics that grep review files.
+        mark="INFO (downgraded: ${REWRITE_WHY[$i]//_/ }; original in ${file##*/}.orig)"
         case "$how" in
             cell:*)
                 how="${how#cell:}"
                 col="${how%%:*}"
                 token="${how#*:}"
                 IFS='|' read -r -a cells <<< "$line"
-                cells[col]="${cells[col]/"$token"/INFO}"
+                cells[col]="${cells[col]/"$token"/$mark}"
                 out=$(IFS='|'; printf '%s' "${cells[*]}")
                 # read drops one trailing empty field ("... |").
                 [[ "$line" == *'|' ]] && out+='|'
@@ -277,18 +295,54 @@ rewrite_file() {
                 ;;
             tok:*)
                 token="${how#tok:}"
-                LINES[idx]="${line/"$token"/INFO}"
+                LINES[idx]="${line/"$token"/$mark}"
                 ;;
         esac
     done
 
+    # Keep the reviewer's original: a downgrade can be wrong (a real CRITICAL
+    # that simply cited no evidence), and the user must be able to see it.
+    if ! cp -p -- "$file" "${file}.orig"; then
+        echo "Error: could not back up $file" >&2
+        exit 1
+    fi
+
     local tmp
     tmp=$(af_tmpfile "$file")
+    # mktemp creates 0600: give the rewritten file the original's mode.
+    chmod "$(_file_mode "$file")" "$tmp" 2>/dev/null || true
     if ! printf '%s\n' "${LINES[@]}" > "$tmp" || ! mv -f "$tmp" "$file"; then
         rm -f "$tmp"
         echo "Error: could not rewrite $file" >&2
         exit 1
     fi
+    log_downgrades "$file"
+}
+
+_file_mode() {
+    stat -c %a -- "$1" 2>/dev/null || stat -f %Lp -- "$1" 2>/dev/null || echo 644
+}
+
+# One "evidence.downgrade" event per downgrade, when the file is a run's review
+# artifact (.archeflow/artifacts/<run_id>/check-<role>.md). Logging never fails
+# the gate.
+log_downgrades() {
+    local file="$1" run_id role i data
+    local re='(^|/)\.archeflow/artifacts/([^/]+)/check-([a-z-]+)\.md$'
+    [[ "$file" =~ $re ]] || return 0
+    run_id="${BASH_REMATCH[2]}"
+    role="${BASH_REMATCH[3]}"
+    af_valid_name "$run_id" || return 0
+    local event_sh
+    event_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-event.sh"
+    [[ -x "$event_sh" ]] || return 0
+    for i in "${!REWRITE_IDX[@]}"; do
+        data=$(jq -cn --arg from "${REWRITE_SEV[$i]}" --arg reason "${REWRITE_WHY[$i]}" \
+            --argjson line "$((REWRITE_IDX[i] + 1))" --arg file "$file" --arg role "$role" \
+            '{from: $from, to: "INFO", reason: $reason, line: $line, file: $file, archetype: $role}') || continue
+        "$event_sh" "$run_id" evidence.downgrade check "$role" "$data" >/dev/null 2>&1 \
+            || echo "  warning: could not log evidence.downgrade event" >&2
+    done
 }
 
 main() {

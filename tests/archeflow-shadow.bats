@@ -151,32 +151,105 @@ EOF
 # Maker — rogue
 # ============================================================
 
-@test "maker: detects rogue when >=3 files changed with 0 tests" {
-  local artifact="$BATS_TEST_TMPDIR/artifact.txt"
-  cat > "$artifact" <<'EOF'
-+++ b/src/auth.py
-+++ b/src/config.py
-+++ b/src/main.py
-Implemented authentication flow.
-EOF
+# The Maker check reads the changed files from the run diff (--diff, as the run
+# skill passes do-maker.diff) and the test evidence from the Maker's report.
 
-  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$artifact"
+# _diff <file> <n-lines> ...: a unified diff adding n lines to each file.
+_diff() {
+  while [[ $# -gt 0 ]]; do
+    printf 'diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -1 +1,%s @@\n' "$1" "$1" "$1" "$1" "$2"
+    for ((k = 0; k < $2; k++)); do printf '+line %s\n' "$k"; done
+    shift 2
+  done
+}
+
+@test "maker: detects rogue when >=3 code files changed with 0 tests (files from --diff)" {
+  echo "Implemented authentication flow. All tests passed." > "$BATS_TEST_TMPDIR/do-maker.md"
+  _diff src/auth.py 2 src/config.py 2 src/main.py 2 > "$BATS_TEST_TMPDIR/do-maker.diff"
+
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"SHADOW_DETECTED"* ]]
+  [[ "$output" == *"rogue"* ]]
+  [[ "$output" == *"No test file changed with 3 code files"* ]]
+}
+
+@test "maker: clean when the diff has a test file and the report shows tests ran" {
+  echo "Added login and a test. pytest: 4 passed." > "$BATS_TEST_TMPDIR/do-maker.md"
+  _diff src/auth.py 30 tests/test_auth.py 10 > "$BATS_TEST_TMPDIR/do-maker.diff"
+
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLEAN"* ]]
+}
+
+@test "maker: a prose report that lists files but no diff cannot fire (regression: the report was read as a diff)" {
+  printf 'Changed src/a.py src/b.py src/c.py src/d.py. Did not write tests.\n' > "$BATS_TEST_TMPDIR/do-maker.md"
+  : > "$BATS_TEST_TMPDIR/empty.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/empty.diff"
+  [ "$status" -eq 1 ]
+  # ... while the same report with the real diff does fire
+  _diff src/a.py 3 src/b.py 3 src/c.py 3 src/d.py 3 > "$BATS_TEST_TMPDIR/do-maker.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
+  [ "$status" -eq 0 ]
   [[ "$output" == *"rogue"* ]]
 }
 
-@test "maker: clean when diff includes test files and evidence" {
-  local artifact="$BATS_TEST_TMPDIR/artifact.txt"
-  cat > "$artifact" <<'EOF'
-+++ b/src/auth.py
-+++ b/tests/test_auth.py
-All tests PASSED successfully.
-EOF
+@test "maker: without --diff it is a usage error (exit 2), not a silent CLEAN" {
+  echo "report" > "$BATS_TEST_TMPDIR/do-maker.md"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"needs --diff"* ]]
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/missing.diff"
+  [ "$status" -eq 2 ]
+}
 
-  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$artifact"
+@test "maker: a one-line README change never needs test evidence" {
+  echo "Fixed a typo in the README." > "$BATS_TEST_TMPDIR/do-maker.md"
+  _diff README.md 1 > "$BATS_TEST_TMPDIR/do-maker.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"CLEAN"* ]]
+  # docs in bulk do not count as code either
+  _diff docs/guide.md 200 CHANGELOG.md 20 README.md 40 > "$BATS_TEST_TMPDIR/do-maker.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
+  [ "$status" -eq 1 ]
+}
+
+@test "maker: the test-evidence rule scales with the code change" {
+  echo "Renamed a variable." > "$BATS_TEST_TMPDIR/do-maker.md"
+  _diff src/a.py 4 > "$BATS_TEST_TMPDIR/do-maker.diff"           # small code change: no evidence needed
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
+  [ "$status" -eq 1 ]
+  _diff src/a.py 25 tests/test_a.py 5 > "$BATS_TEST_TMPDIR/do-maker.diff"   # 25 code lines, no evidence
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No evidence in the report that tests ran (25 code lines"* ]]
+  echo "Ran the suite: 12 passed." > "$BATS_TEST_TMPDIR/do-maker.md"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff"
+  [ "$status" -eq 1 ]
+}
+
+@test "maker: code files the proposal does not mention are out of scope (tests and docs are not)" {
+  echo "pytest: 3 passed" > "$BATS_TEST_TMPDIR/do-maker.md"
+  echo "Change calc.py and add tests." > "$BATS_TEST_TMPDIR/plan-creator.md"
+  _diff src/calc.py 3 tests/test_calc.py 3 README.md 2 > "$BATS_TEST_TMPDIR/do-maker.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" \
+    --diff "$BATS_TEST_TMPDIR/do-maker.diff" --proposal "$BATS_TEST_TMPDIR/plan-creator.md"
+  [ "$status" -eq 1 ]
+  _diff src/calc.py 3 src/extra.py 3 > "$BATS_TEST_TMPDIR/do-maker.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" \
+    --diff "$BATS_TEST_TMPDIR/do-maker.diff" --proposal "$BATS_TEST_TMPDIR/plan-creator.md"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 code files changed outside proposal scope"* ]]
+}
+
+@test "maker: a detection is logged in phase do, with the cycle derived from the log" {
+  "$LIB_DIR/archeflow-event.sh" mk-run run.start plan "" '{}' 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" mk-run cycle.boundary act "" '{"cycle":1}' 2>/dev/null
+  echo "done" > "$BATS_TEST_TMPDIR/do-maker.md"
+  _diff src/a.py 1 src/b.py 1 src/c.py 1 > "$BATS_TEST_TMPDIR/do-maker.diff"
+  run "$LIB_DIR/archeflow-shadow.sh" detect maker "$BATS_TEST_TMPDIR/do-maker.md" --diff "$BATS_TEST_TMPDIR/do-maker.diff" --run-id mk-run
+  [ "$status" -eq 0 ]
+  jq -se 'last | .type == "shadow.detected" and .phase == "do" and .data.cycle == 2' .archeflow/events/mk-run.jsonl
 }
 
 # ============================================================
@@ -573,4 +646,84 @@ EOF
   run "$LIB_DIR/archeflow-shadow.sh" check-system r-clean
   [ "$status" -eq 1 ]
   [[ "$output" == *"CLEAN"* ]]
+}
+
+# ============================================================
+# Tunnel Vision (from findings-cycle-<N>.json, 2+ reviewers, 3+ findings)
+# ============================================================
+
+_tv_run() {  # <run> <n-reviewers> <findings json>
+  mkdir -p ".archeflow/artifacts/$1"
+  local r
+  for r in guardian skeptic sage trickster; do
+    [[ "$2" -gt 0 ]] || break
+    printf '## Review\n| a.py:1 | WARNING | security | x |\nREJECTED\n' > ".archeflow/artifacts/$1/check-$r.md"
+    set -- "$1" "$(( $2 - 1 ))" "$3"
+  done
+  printf '%s\n' "$3" > ".archeflow/artifacts/$1/findings-cycle-1.json"
+}
+
+@test "check-system: approved run with no findings is CLEAN (regression: tunnel_vision with 0 categories)" {
+  mkdir -p .archeflow/artifacts/tv-clean
+  printf '## Review\nNo findings. Security and design look fine.\n\nAPPROVED\n' > .archeflow/artifacts/tv-clean/check-guardian.md
+  echo '[]' > .archeflow/artifacts/tv-clean/findings-cycle-1.json
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-clean
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLEAN"* ]]
+}
+
+@test "check-system: a single reviewer never shows tunnel vision" {
+  _tv_run tv-one 1 '[{"id":"a:security","category":"security"},{"id":"b:security","category":"security"},{"id":"c:security","category":"security"}]'
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-one
+  [ "$status" -eq 1 ]
+}
+
+@test "check-system: 2 reviewers, 3 findings, one category -> tunnel_vision" {
+  _tv_run tv-yes 2 '[{"id":"a:security","category":"security"},{"id":"b:security","category":"Security"},{"id":"c:security","category":"security"}]'
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tunnel_vision"*"3 findings of 2 reviewers"*"security"* ]]
+  # logged as a system shadow of cycle 1
+  jq -se 'map(select(.type == "shadow.detected")) | length == 1 and .[0].data.archetype == "system" and .[0].data.shadow == "tunnel_vision" and .[0].data.cycle == 1' .archeflow/events/tv-yes.jsonl
+}
+
+@test "check-system: 2 reviewers with mixed categories, or fewer than 3 findings, are CLEAN" {
+  _tv_run tv-mixed 2 '[{"id":"a:security","category":"security"},{"id":"b:testing","category":"testing"},{"id":"c:security","category":"security"}]'
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-mixed
+  [ "$status" -eq 1 ]
+  _tv_run tv-few 3 '[{"id":"a:security","category":"security"},{"id":"b:security","category":"security"}]'
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-few
+  [ "$status" -eq 1 ]
+}
+
+@test "check-system: --cycle picks that cycle's findings file and is recorded" {
+  _tv_run tv-cyc 2 '[]'
+  printf '%s\n' '[{"id":"a:x","category":"design"},{"id":"b:x","category":"design"},{"id":"c:x","category":"design"}]' \
+    > .archeflow/artifacts/tv-cyc/findings-cycle-2.json
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-cyc --cycle 1
+  [ "$status" -eq 1 ]
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-cyc --cycle 2
+  [ "$status" -eq 0 ]
+  jq -e 'select(.type == "shadow.detected") | .data.cycle == 2' .archeflow/events/tv-cyc.jsonl
+  run "$LIB_DIR/archeflow-shadow.sh" check-system tv-cyc --cycle zero
+  [ "$status" -eq 2 ]
+}
+
+@test "check-system: echo chamber counts only the current cycle's review.verdict events" {
+  "$LIB_DIR/archeflow-event.sh" r-ec review.verdict check guardian '{"archetype":"guardian","verdict":"APPROVED","findings":[]}' 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" r-ec cycle.boundary act "" '{"cycle":1}' 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" r-ec review.verdict check guardian '{"archetype":"guardian","verdict":"APPROVED","findings":[]}' 2>/dev/null
+  run "$LIB_DIR/archeflow-shadow.sh" check-system r-ec
+  [ "$status" -eq 1 ]
+  "$LIB_DIR/archeflow-event.sh" r-ec review.verdict check sage '{"archetype":"sage","verdict":"APPROVED","findings":[]}' 2>/dev/null
+  run "$LIB_DIR/archeflow-shadow.sh" check-system r-ec
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"echo_chamber"*"2 reviewers"* ]]
+}
+
+@test "check-system: a reviewer with findings breaks the echo chamber" {
+  "$LIB_DIR/archeflow-event.sh" r-ec2 review.verdict check guardian '{"archetype":"guardian","verdict":"APPROVED","findings":[]}' 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" r-ec2 review.verdict check sage '{"archetype":"sage","verdict":"APPROVED","findings":[{"severity":"INFO","description":"naming"}]}' 2>/dev/null
+  run "$LIB_DIR/archeflow-shadow.sh" check-system r-ec2
+  [ "$status" -eq 1 ]
 }

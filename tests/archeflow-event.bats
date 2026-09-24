@@ -185,3 +185,35 @@ teardown() {
   [ "$status" -ne 0 ]
   [ ! -e "$BATS_TEST_TMPDIR/elsewhere" ]
 }
+
+# ── automatic parents (no parent_seqs argument) ─────────────────────────────
+
+@test "event: without parent_seqs, agent events hang under that agent's agent.start" {
+  "$LIB_DIR/archeflow-event.sh" ap run.start plan "" '{}' 2>/dev/null           # 1
+  "$LIB_DIR/archeflow-event.sh" ap agent.start plan creator '{}' 2>/dev/null     # 2
+  "$LIB_DIR/archeflow-event.sh" ap agent.start plan explorer '{}' 2>/dev/null    # 3
+  "$LIB_DIR/archeflow-event.sh" ap agent.complete plan creator '{}' 2>/dev/null  # 4 -> 2
+  "$LIB_DIR/archeflow-event.sh" ap shadow.detected plan creator '{}' 2>/dev/null # 5 -> 2
+  "$LIB_DIR/archeflow-event.sh" ap review.verdict check guardian '{}' 2>/dev/null # 6 -> 1 (no agent.start)
+  "$LIB_DIR/archeflow-event.sh" ap cycle.boundary act "" '{}' 2>/dev/null        # 7 -> 1
+  "$LIB_DIR/archeflow-event.sh" ap agent.start plan creator '{}' 2>/dev/null     # 8 -> 7
+  "$LIB_DIR/archeflow-event.sh" ap agent.complete plan creator '{}' 2>/dev/null  # 9 -> 8
+  run jq -c '.parent' .archeflow/events/ap.jsonl
+  [ "$(tr '\n' ' ' <<<"$output")" = "[] [1] [1] [2] [2] [1] [1] [7] [8] " ]
+}
+
+@test "event: an explicit empty parent_seqs still makes a root, an explicit list wins" {
+  "$LIB_DIR/archeflow-event.sh" ap2 run.start plan "" '{}' 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" ap2 agent.start plan creator '{}' "" 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" ap2 agent.complete plan creator '{}' "1" 2>/dev/null
+  [ "$(jq -c '.parent' .archeflow/events/ap2.jsonl | tr '\n' ' ')" = "[] [] [1] " ]
+}
+
+@test "event: automatic parents ignore malformed lines and non-integer seqs" {
+  mkdir -p .archeflow/events
+  printf '%s\n' '{"seq":"$(touch pwned)","type":"run.start"}' '{"seq":2.5,"type":"cycle.boundary"}' > .archeflow/events/ap3.jsonl
+  run "$LIB_DIR/archeflow-event.sh" ap3 agent.start plan creator '{}'
+  [ "$status" -eq 0 ]
+  [ ! -e pwned ]
+  [ "$(tail -1 .archeflow/events/ap3.jsonl | jq -c '.parent')" = "[]" ]
+}

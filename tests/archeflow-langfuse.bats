@@ -9,6 +9,10 @@ setup() {
   export HOME="$BATS_TEST_TMPDIR/home"
   unset XDG_CONFIG_HOME  # hermetic: CI runners set it, which would bypass $HOME/.config
   mkdir -p "$HOME" .archeflow "$BATS_TEST_TMPDIR/bin"
+  # Config lives only in the user's own directory (never in the repository).
+  LF_DIR="$HOME/.config/archeflow"
+  LF_ENV="$LF_DIR/langfuse.env"
+  mkdir -p "$LF_DIR"
   export CURL_LOG="$BATS_TEST_TMPDIR/curl.argv"
   export CURL_HDR="$BATS_TEST_TMPDIR/curl.headers"
   cat > "$BATS_TEST_TMPDIR/bin/curl" <<'SH'
@@ -37,7 +41,7 @@ teardown() {
 }
 
 @test "langfuse: config file is parsed as data, never executed" {
-  cat > .archeflow/langfuse.env <<EOF
+  cat > "$LF_ENV" <<EOF
 LANGFUSE_ENABLED=true
 LANGFUSE_HOST=http://127.0.0.1:9
 LANGFUSE_PUBLIC_KEY=pk
@@ -53,7 +57,7 @@ EOF
 }
 
 @test "langfuse: secret is sent via header file, not argv" {
-  cat > .archeflow/langfuse.env <<'EOF'
+  cat > "$LF_ENV" <<'EOF'
 export LANGFUSE_ENABLED="true"
 LANGFUSE_HOST='http://127.0.0.1:9/'   # trailing comment
 LANGFUSE_PUBLIC_KEY=pk-test
@@ -73,14 +77,14 @@ EOF
 @test "langfuse: temp files are removed after the POST" {
   export TMPDIR="$BATS_TEST_TMPDIR/tmp"
   mkdir -p "$TMPDIR"
-  printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://127.0.0.1:9\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' > .archeflow/langfuse.env
+  printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://127.0.0.1:9\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' > "$LF_ENV"
   run bash -c "echo '$EVENT' | '$LIB_DIR/archeflow-langfuse.sh'"
   [ "$status" -eq 0 ]
   [ -z "$(ls -A "$TMPDIR")" ]
 }
 
 @test "langfuse: caller's PAYLOAD env var is not forwarded" {
-  printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://127.0.0.1:9\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' > .archeflow/langfuse.env
+  printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://127.0.0.1:9\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' > "$LF_ENV"
   run env PAYLOAD='{"injected":true}' bash -c "echo '$EVENT' | '$LIB_DIR/archeflow-langfuse.sh'"
   [ "$status" -eq 0 ]
   ! grep -q 'injected' "$CURL_LOG"
@@ -89,7 +93,7 @@ EOF
 
 # --- B2: config comes from one trusted source ------------------------------
 
-@test "langfuse: git-tracked (repository-supplied) langfuse.env is refused" {
+@test "langfuse: a git-tracked (repository-supplied) project langfuse.env is never read" {
   printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=https://attacker.example\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' \
     > .archeflow/langfuse.env
   git add -f .archeflow/langfuse.env && git commit --quiet -m "repo ships langfuse config"
@@ -99,7 +103,7 @@ EOF
 }
 
 @test "langfuse: inherited keys are never combined with a host from a file" {
-  printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=https://attacker.example\n' > .archeflow/langfuse.env
+  printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=https://attacker.example\n' > "$LF_ENV"
   run env LANGFUSE_PUBLIC_KEY=pk-lf-victim LANGFUSE_SECRET_KEY=sk-lf-victim-secret \
     bash -c "echo '$EVENT' | '$LIB_DIR/archeflow-langfuse.sh'"
   [ "$status" -eq 0 ]
@@ -123,7 +127,7 @@ EOF
   grep -qx "Authorization: Basic $(printf 'pk:sk' | base64 | tr -d '\n')" "$CURL_HDR"
 }
 
-@test "langfuse: parent directories are not searched for langfuse.env" {
+@test "langfuse: project and parent-directory langfuse.env files are never read" {
   printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://127.0.0.1:9\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' \
     > .archeflow/langfuse.env
   mkdir inner && cd inner && git init --quiet
@@ -143,19 +147,19 @@ EOF
 @test "langfuse: plain-http non-loopback hosts and URLs with credentials are refused" {
   for host in http://lf.example http://127.evil.example "https://u:p@lf.example" "http://localhost.evil.example"; do
     printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=%s\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' "$host" \
-      > .archeflow/langfuse.env
+      > "$LF_ENV"
     run bash -c "echo '$EVENT' | '$LIB_DIR/archeflow-langfuse.sh'"
     [ "$status" -eq 0 ]
     [ ! -f "$CURL_LOG" ]
   done
-  grep -q "refusing LANGFUSE_HOST" .archeflow/langfuse.errors.log
+  grep -q "refusing LANGFUSE_HOST" "$LF_DIR/langfuse.errors.log"
 }
 
 @test "langfuse: the error log is never appended through a symlink" {
   printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://lf.example\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' \
-    > .archeflow/langfuse.env
+    > "$LF_ENV"
   echo keep > "$BATS_TEST_TMPDIR/target"
-  ln -s "$BATS_TEST_TMPDIR/target" .archeflow/langfuse.errors.log
+  ln -s "$BATS_TEST_TMPDIR/target" "$LF_DIR/langfuse.errors.log"
   run bash -c "echo '$EVENT' | '$LIB_DIR/archeflow-langfuse.sh'"
   [ "$status" -eq 0 ]
   [ "$(cat "$BATS_TEST_TMPDIR/target")" = "keep" ]

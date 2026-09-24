@@ -71,7 +71,9 @@ Evaluate top to bottom; the first match wins.
 | Findings left, no cycles left | **Stop**: report open findings, keep the branch |
 
 WARNING and INFO alone do not block a merge; list them in the report. Emit `cycle.boundary`
-with cycle, max_cycles, the counts per severity and the decision.
+`{"cycle", "max_cycles", "exit_condition", "decision", "critical", "warning", "info"}`:
+`exit_condition` is `approved`, `findings_open`, `max_cycles`, `escalated` or `wiggum_break`;
+`decision` is `merge`, `cycle_back`, `stop` or `escalate` (schema: `archeflow:run`, `reference.md`).
 
 ## Step 4: Feedback for the next cycle
 
@@ -97,3 +99,16 @@ agent it is routed to (Creator: plan step, Maker: do step):
 Keep it under ~500 tokens: drop INFO first, then summarise WARNINGs by theme. An empty
 `## Creator-Routed Issues` section means the next cycle keeps the current proposal and starts
 at Do.
+
+## Step 5: Archive the cycle
+
+Before the next cycle starts, keep a record of this one in `.archeflow/artifacts/<run_id>/cycle-<N>/`
+without taking away what the next cycle reads:
+
+- **copy** `plan-*.md` and `act-feedback.md`: the next Creator and Maker read `act-feedback.md`,
+  and the Maker, the Maker check, Skeptic, Sage and `check-system` read `plan-creator.md` from the
+  top level. A new Creator run overwrites `plan-creator.md`; a kept proposal stays as it is.
+- **move** `do-*` and `check-*`: `integrate` writes a new `do-maker.diff`, and reviews of this
+  cycle must not be read as reviews of the next one.
+- leave `findings-cycle-<N>.json` and `convergence-cycle-<N>.json` where they are (the
+  convergence and Wiggum Break checks compare them across cycles).

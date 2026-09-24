@@ -1,82 +1,46 @@
-# ArcheFlow Configuration
-# Copy to your project's .archeflow/config.yaml and customize
+# ArcheFlow configuration: a complete example with the documented defaults.
+# Copy what you need to your project's .archeflow/config.yaml (or run /archeflow:init).
+# Every key is described in docs/configuration.md.
 
-version: "0.9.0"
+version: "0.11.0"           # the ArcheFlow release this example belongs to
 
-# Strategy — execution shape: pdca (cyclic), pipeline (linear), auto (task-based selection)
-strategy: auto
+# workflow: standard        # fast | standard | thorough; default: chosen from the task
+strategy: auto              # pdca (cyclic), pipeline (linear) or auto
 
-# Budget
 costs:
-  budget_usd: 10.00
+  budget_usd: 10.00         # per run; wiggum-check reports a soft break above 95%
   per_agent_usd: 2.00
   warn_at_percent: 80
 
-# Git integration
 git:
   enabled: true
   branch_prefix: "archeflow/"
-  merge_strategy: squash
+  auto_merge: false         # true: merge without asking after the reviewers approve
+  merge_strategy: no-ff     # no-ff | squash | rebase
+  commit_style: conventional  # conventional | simple
   auto_push: false
+  # signing_key: ~/.ssh/id_ed25519.pub
 
-# Domain (auto-detected if omitted)
-# domain: code | writing | research
+# test_command: "npm test"  # top level; runs after an ArcheFlow merge (archeflow-rollback.sh)
 
-# Memory
 memory:
   enabled: true
-  inject_threshold: 2  # min frequency to inject
+  inject_threshold: 2       # a lesson must have been seen this often before it is injected
   max_lessons: 10
   decay_after_runs: 10
 
-# Models — default and per-archetype/per-workflow model selection.
-# ArcheFlow reads this to assign models to agents. The default applies unless overridden.
 models:
   default: sonnet
-  # Per-archetype overrides (uncomment to customize):
   # archetypes:
-  #   explorer: haiku         # Cheap model for research/exploration
-  #   creator: sonnet         # Creative tasks need stronger model
-  #   maker: sonnet           # Implementation needs full capability
-  #   guardian: sonnet        # Security review — don't skimp
-  #   skeptic: haiku          # Assumption checking is analytical
-  #   sage: haiku             # Quality review can use cheaper model
-  #   trickster: sonnet       # Adversarial testing benefits from stronger model
-  # Per-workflow overrides (uncomment to customize):
+  #   explorer: haiku
+  #   guardian: sonnet
   # workflows:
   #   fast:
-  #     default: haiku        # Fast workflow uses cheaper models by default
-  #     archetypes:
-  #       guardian: sonnet     # Except Guardian — always needs strong model
-  #   standard:
-  #     default: sonnet
-  #   thorough:
-  #     default: sonnet
+  #     default: haiku
 
-# Progress
-progress:
-  enabled: true
-  file: .archeflow/progress.md
+# lenses: [security]
+# patterns:
+#   check: cascade
 
-# Hooks — commands to run at orchestration lifecycle events.
-# Uncomment and customize as needed.
-#
-# hooks:
-#   run-start:
-#     command: "echo 'ArcheFlow run starting'"
-#     fail_action: warn        # warn | abort
-#   phase-complete:
-#     command: "./scripts/on-phase-complete.sh"
-#     fail_action: warn
-#   agent-complete:
-#     command: "./scripts/on-agent-complete.sh"
-#     fail_action: warn
-#   pre-merge:
-#     command: "./scripts/pre-merge-checks.sh"
-#     fail_action: abort       # abort recommended — blocks bad merges
-#   post-merge:
-#     command: "./scripts/post-merge-notify.sh"
-#     fail_action: warn
-#   run-complete:
-#     command: "./scripts/on-run-complete.sh"
-#     fail_action: warn
+# Hooks do not go in this file. Commands for the four hook points (run-start,
+# pre-merge, post-merge, run-complete) go in .archeflow/hooks.yaml; see docs/hooks.md.

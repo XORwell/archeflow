@@ -12,8 +12,14 @@
 #   af_is_int <s>             0 if <s> is a plain decimal integer (optional leading -)
 #   af_as_int <s> [default]   print <s> as a base-10 integer, or <default> (0)
 #   af_tmpfile <target>       private temp file next to <target> (for atomic mv)
-#   af_refuse_symlink <path>  return 1 (with a message) if <path> is a symlink
+#   af_refuse_symlink <path>  return 1 (with a message) if <path>, or any of its
+#                             parent directories below the project root, is a symlink
 #   af_append <file> <line>   append one line, refusing to follow a symlink
+#   af_check_state_dirs       exit 1 if .archeflow/ or one of its state directories
+#                             is a symlink or resolves outside the repository
+#   af_yaml_to_json <file>    YAML -> JSON (yq, python3+PyYAML, or archeflow-yaml.sh)
+#   af_config_json            .archeflow/config.yaml as JSON ("{}" if absent)
+#   af_config_test_command    the top-level test_command of .archeflow/config.yaml
 #   af_default_branch         repository default branch (origin/HEAD, main,
 #                             master, else the current branch; may print "")
 #
@@ -68,12 +74,98 @@ af_tmpfile() {
   mktemp "${target}.XXXXXX"
 }
 
+# Every existing component of <path> is checked, not just the last one: a
+# committed ".archeflow/events -> /elsewhere" would otherwise redirect writes
+# outside the repository. Relative paths are checked from the current
+# directory down; absolute paths only below the project root (so system-level
+# links such as /tmp -> /private/tmp on macOS do not count).
 af_refuse_symlink() {
-  if [[ -L "$1" ]]; then
-    echo "Error: refusing to write through symlink: $1" >&2
-    return 1
+  local p="$1" cur rest part root
+  if [[ "$p" == /* ]]; then
+    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    if [[ "$p" == "$root"/* ]]; then
+      cur="$root"; rest="${p#"$root"/}"
+    else
+      cur=""; rest=""
+      [[ -L "$p" ]] && { echo "Error: refusing to write through symlink: $p" >&2; return 1; }
+    fi
+  else
+    cur="."; rest="$p"
+  fi
+  local -a parts=()
+  [[ -n "$rest" ]] && IFS=/ read -r -a parts <<<"$rest"
+  for part in "${parts[@]}"; do
+    [[ -z "$part" || "$part" == "." ]] && continue
+    cur="$cur/$part"
+    if [[ -L "$cur" ]]; then
+      echo "Error: refusing to write through symlink: ${cur#./} (in $p)" >&2
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Refuse to operate when ArcheFlow's state directory, or one of its standard
+# subdirectories, is a symlink or resolves outside the repository. Call it at
+# the top of every script that writes under .archeflow/. Missing directories
+# are fine (they are created later, as real directories).
+AF_STATE_SUBDIRS=(events artifacts runs worktrees memory locks merge-queue templates lenses progress)
+af_check_state_dirs() {
+  local base="${1:-.archeflow}" d root real
+  if [[ -L "$base" ]]; then
+    die "refusing to use ${base}: it is a symlink (a repository can point it anywhere)."
+  fi
+  [[ -e "$base" ]] || return 0
+  [[ -d "$base" ]] || die "refusing to use ${base}: not a directory."
+  for d in "${AF_STATE_SUBDIRS[@]}"; do
+    [[ -L "$base/$d" ]] && die "refusing to use ${base}/${d}: it is a symlink (a repository can point it anywhere)."
+  done
+  if root="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$root" ]]; then
+    root="$(cd "$root" && pwd -P)"
+    real="$(cd "$base" && pwd -P)"
+    [[ "$real" == "$root" || "$real" == "$root"/* ]] \
+      || die "refusing to use ${base}: it resolves outside the repository (${real})."
   fi
   return 0
+}
+
+# YAML -> JSON: mikefarah yq, else python3+PyYAML, else the built-in
+# dependency-free converter. The file path is always passed as an argument.
+af_yaml_to_json() {
+  local file="$1" here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if command -v yq >/dev/null 2>&1 && yq --version 2>&1 | grep -qi mikefarah; then
+    yq -o=json '.' "$file"
+  elif command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+    python3 -c 'import sys, json, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1])), default=str))' "$file"
+  else
+    "$here/archeflow-yaml.sh" "$file"
+  fi
+}
+
+# .archeflow/config.yaml as a JSON object; "{}" when the file is absent or empty.
+# Exits non-zero when the file exists but cannot be parsed.
+af_config_json() {
+  local file="${AF_CONFIG_FILE:-.archeflow/config.yaml}" json
+  [[ -f "$file" ]] || { echo '{}'; return 0; }
+  # The dependency-free converter only, so every host parses config the same way.
+  json="$("$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-yaml.sh" "$file")" || return 1
+  jq -c 'if type == "object" then . else {} end' <<<"${json:-null}"
+}
+
+# Top-level test_command (a nested "x: {test_command: ...}" never counts).
+# Prints "" when unset. Falls back to a plain top-level line match when the
+# config uses YAML the converters cannot read.
+af_config_test_command() {
+  local file="${AF_CONFIG_FILE:-.archeflow/config.yaml}" json
+  [[ -f "$file" ]] || return 0
+  if json="$(af_config_json 2>/dev/null)"; then
+    jq -r '.test_command // empty | if type == "string" then . else tostring end' <<<"$json"
+  else
+    awk '/^test_command:/ { sub(/^test_command:[[:space:]]*/, ""); sub(/[[:space:]]+#.*$/, "")
+           if ($0 ~ /^".*"$/ || $0 ~ /^\047.*\047$/) $0 = substr($0, 2, length($0) - 2)
+           print; exit }' "$file"
+  fi
 }
 
 af_append() {

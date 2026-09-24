@@ -65,6 +65,8 @@ Domains can override default model assignments:
 
 Domains declare which extra files agents should read per phase. Context injection is additive (on top of standard ArcheFlow context).
 
+A domain file in `.archeflow/domains/` can come with the repository, so its context entries follow the lens rule: only plain relative paths inside the project (letters, digits, `.`, `_`, `-`, `/`; no leading `/` or `-`, no `..`, no `~`, `$`, backticks, globs or spaces). Skip any other entry with a warning, and read files with the file-reading tool, never through a shell command.
+
 | Phase | Code | Writing |
 |-------|------|---------|
 | always | README.md, config.yaml | voice profile, persona, characters |

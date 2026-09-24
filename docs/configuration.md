@@ -58,16 +58,24 @@ models:
 | `costs.per_agent_usd`, `costs.warn_at_percent` | agent | Per-agent cap and warning threshold (`cost-tracking` skill). |
 | `git.branch_prefix`, `git.merge_strategy`, `git.commit_style`, `git.auto_push`, `git.signing_key` | `archeflow-git.sh` | Run branch prefix (default `archeflow/`), how a finished run is merged (default `no-ff`), commit message style, whether run branches are pushed (default `false`), which key signs commits. |
 | `git.enabled` | agent | Whether a run works on its own branch. |
-| `git.commit_artifacts` | agent | Default `false`: a run commits nothing under `.archeflow/`. `true` also commits events and artifacts to the run branch. |
-| `git.auto_merge` | agent | Default `false`: after the reviewers approve, the run asks you before merging into the base branch. `true` merges without asking. |
-| `test_command` (top level) | `archeflow-rollback.sh` | Command that must pass after a merge. If it fails, the merge commit of that run is reverted. Runs with `bash -c`. Unset: post-merge tests are skipped. `/archeflow:init` asks for it. |
+| `git.auto_merge` | agent | Default `false`: after the reviewers approve, the run asks you before merging into the base branch. `true` merges without asking, but only after you confirmed it once in the session (the file can come with a cloned repository). |
+| `test_command` (top level) | `archeflow-git.sh init`, `archeflow-rollback.sh` | Command that must pass after a merge. If it fails, the merge commit of that run is reverted. Runs with `bash -c`. Unset: post-merge tests are skipped. `/archeflow:init` asks for it. Single- or double-quoted values are both fine. `init` records the value for the run; if `config.yaml` says something else when the tests are due, nothing runs (exit 2). |
+| `workflow` | agent | Default workflow for `/archeflow:run` when no `--workflow` is given: `fast`, `standard` or `thorough`. Bundles write it. |
 | `models.*` | agent | Model per role and per workflow. Resolution order: per-workflow per-role, per-workflow default, per-role, global default. |
-| `memory.*` | agent | How cross-run lessons are injected. |
+| `memory.*` | agent | How cross-run lessons are injected. Lessons live in `.archeflow/memory/`, which is local by default (ignored by the generated `.archeflow/.gitignore`). |
 | `strategy`, `lenses`, `patterns` | agent | See below. |
 
 `config.yaml` is trusted configuration: `test_command` is executed and the git settings are
 used as given. Review it before running ArcheFlow in a repository you did not write (see
 [SECURITY.md](../SECURITY.md)).
+
+A run never changes ArcheFlow's own configuration. `archeflow-git.sh init` fingerprints
+`config.yaml`, `hooks.yaml`, `lenses/`, `memory/lessons.jsonl`, `archetypes/`, `domains/`,
+`teams/`, `patterns/`, `workflows/`, `multi-run.yaml` and `queue.md` under `.archeflow/`;
+`merge` refuses if any of them changed during the run. The Maker's commits may not touch
+`.archeflow/` at all (`integrate` refuses them), and `merge` brings nothing under `.archeflow/`
+into your branch except the run's own artifacts and event log. To change the configuration,
+edit it between runs.
 
 ## Workflows, teams, roles, domains
 
@@ -110,11 +118,13 @@ The format is in [`lenses/SCHEMA.md`](../lenses/SCHEMA.md).
 <archeflow-root>/lib/archeflow-lens.sh list
 <archeflow-root>/lib/archeflow-lens.sh validate my-lens
 <archeflow-root>/lib/archeflow-lens.sh merge security compliance-gdpr    # merged config as JSON
+<archeflow-root>/lib/archeflow-lens.sh merge --from-config               # the lenses: list in config.yaml
 ```
 
 A lens can inject files into agent prompts (`context_inject`). A lens from someone else's
 repository can therefore point agents at files you do not want sent to a model; review project
-lenses like any other configuration.
+lenses like any other configuration. `merge` accepts only plain relative paths inside the
+project (letters, digits, `.`, `_`, `-`, `/`; no `..`, `~`, `$`, backticks, globs or spaces).
 
 ## Patterns
 
@@ -139,8 +149,10 @@ patterns:
 To run role turns on a local model instead of the Claude API, merge
 [`examples/config-local-ollama.yaml`](../examples/config-local-ollama.yaml) into `config.yaml`:
 `models.provider: ollama` and a mapping from the logical models (`haiku`, `sonnet`, `opus`) to
-Ollama tags. The run skill then calls `lib/archeflow-ollama.sh chat <tag> --system-file
-agents/<role>.md` for each turn.
+Ollama tags. The run skill then calls `lib/archeflow-ollama.sh chat --tier <haiku|sonnet|opus>
+--system-file agents/<role>.md` for each turn. The script reads `models.mapping` and
+`models.ollama.base_url` from `config.yaml` itself and validates them (model names:
+`[A-Za-z0-9][A-Za-z0-9._:/-]*`; the base URL must be a plain `http(s)://host[:port]` URL).
 
 ```bash
 ollama serve
@@ -158,9 +170,14 @@ It is off unless enabled, and it never blocks a run. Configuration comes from ex
 
 1. the environment, when `LANGFUSE_ENABLED=true` is set there (`LANGFUSE_HOST`,
    `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`); otherwise
-2. the first `langfuse.env` file found in `<repo>/.archeflow/langfuse.env` (only if the file is
-   not tracked by git), `${XDG_CONFIG_HOME:-~/.config}/archeflow/langfuse.env`, or
-   `~/.archeflow/langfuse.env`.
+2. the first user-level `langfuse.env` file found:
+   `${XDG_CONFIG_HOME:-~/.config}/archeflow/langfuse.env`, then `~/.archeflow/langfuse.env`.
+
+A `langfuse.env` inside a project (`<repo>/.archeflow/langfuse.env`) is never read, whether it is
+committed or not: a repository could otherwise ship one (directly, through a symlinked
+`.archeflow/`, or as `LANGFUSE.env` on a case-insensitive filesystem) and receive all your run
+data. If you used a project-local file with an earlier version, move it to
+`~/.config/archeflow/langfuse.env`.
 
 The host must use `https://`, or `http://` on a loopback address. A template is in
 `.archeflow/langfuse.env.example`. Past runs can be sent with
@@ -173,7 +190,7 @@ The host must use `https://`, or `http://` on a loopback address. A template is 
 | `ARCHEFLOW_SHADOWS=off` | Disable the failure-mode checks in `archeflow-shadow.sh` |
 | `ARCHEFLOW_TASK_WORDS` | Expected proposal size for the Creator's scope check (skipped if unset) |
 | `ARCHEFLOW_MODEL_PROVIDER=ollama` | Treat the run as local (cost recorded as USD 0) |
-| `ARCHEFLOW_OLLAMA_BASE_URL` | Full Ollama base URL; wins over `OLLAMA_HOST` |
+| `ARCHEFLOW_OLLAMA_BASE_URL` | Full Ollama base URL; wins over `models.ollama.base_url` and `OLLAMA_HOST` |
 | `OLLAMA_HOST` | Ollama address (`host:port` or URL), as for the `ollama` CLI |
 | `ARCHEFLOW_OLLAMA_ALLOW_REMOTE=1` | Allow a non-loopback Ollama host |
 | `ARCHEFLOW_A2A_BIND` | Listen address for `archeflow-a2a.sh serve` (default 127.0.0.1) |

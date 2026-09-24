@@ -21,24 +21,26 @@ for the Ollama and Langfuse scripts.
 | `archeflow-score.sh` | Per-role effectiveness across runs | `archeflow-score.sh extract .archeflow/events/<run_id>.jsonl`, then `archeflow-score.sh report` |
 
 `archeflow-event.sh` takes the run ID, event type, phase, agent, a JSON object, and optionally
-the comma-separated numbers of parent events. Parents define the tree that `archeflow-dag.sh` draws;
-events without parents appear at the top level.
+the comma-separated numbers of parent events. Parents define the tree that `archeflow-dag.sh` draws.
+Without the argument the script picks them: an agent's events hang under its `agent.start`,
+everything else under the latest `run.start`, `phase.transition` or `cycle.boundary`; `""` makes
+an event a root. The event schema is in `skills/run/reference.md`.
 
 ## Checks
 
 | Script | Purpose | Example |
 |--------|---------|---------|
-| `archeflow-shadow.sh` | Failure-mode checks on one agent's output | `archeflow-shadow.sh detect guardian review.md` |
+| `archeflow-shadow.sh` | Failure-mode checks on one agent's output (`detect`), system checks on a cycle (`check-system`) | `archeflow-shadow.sh detect maker do-maker.md --diff do-maker.diff` |
 | `archeflow-evidence.sh` | Check that CRITICAL/WARNING findings carry evidence | `archeflow-evidence.sh validate review.md` |
-| `archeflow-convergence.sh` | Convergence between cycles, oscillating findings, Wiggum Break | `archeflow-convergence.sh wiggum-check <run_id>` |
+| `archeflow-convergence.sh` | Convergence between cycles, oscillating findings, Wiggum Break (`wiggum-check` includes the oscillation check and logs a `wiggum.break` event) | `archeflow-convergence.sh wiggum-check <run_id>` |
 
 ## Git
 
 | Script | Purpose | Example |
 |--------|---------|---------|
-| `archeflow-git.sh` | Run branch, Maker worktree (`worktree`, `integrate`), merge, rollback, cleanup | `archeflow-git.sh init <run_id>` |
-| `archeflow-rollback.sh` | Run `test_command` after a merge and revert this run's merge if it fails; or roll back to a phase | `archeflow-rollback.sh <run_id> --to check` |
-| `archeflow-review.sh` | Diff and stats for a review | `archeflow-review.sh --branch feat/rate-limit` |
+| `archeflow-git.sh` | Run branch, Maker worktree (`worktree`, `integrate`), merge, cleanup; `phase-commit` and `rollback --to` are manual tools a run does not use | `archeflow-git.sh init <run_id>` |
+| `archeflow-rollback.sh` | Run `test_command` after a merge and revert this run's merge commit if it fails | `archeflow-rollback.sh <run_id>` |
+| `archeflow-review.sh` | Diff and stats for a review; without arguments: uncommitted changes including new untracked files | `archeflow-review.sh --branch feat/rate-limit` |
 | `archeflow-merge-queue.sh` | Merge several finished branches in priority order | `archeflow-merge-queue.sh status` |
 
 ## Setup and memory

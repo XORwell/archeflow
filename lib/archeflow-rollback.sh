@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# archeflow-rollback.sh — Auto-revert a merge that fails post-merge tests,
-# or roll back to a specific PDCA phase boundary.
+# archeflow-rollback.sh — Run the post-merge tests of a run and auto-revert its
+# merge commit if they fail.
 #
 # Usage:
-#   archeflow-rollback.sh <run_id> [--test-cmd <cmd>]       # Post-merge test + revert
-#   archeflow-rollback.sh <run_id> --to <phase>             # Roll back to phase boundary
+#   archeflow-rollback.sh <run_id> [--test-cmd <cmd>]
 #
-# --to <phase>: Roll back to the given phase boundary (plan, do, or check).
-#   Delegates to archeflow-git.sh rollback and emits a decision event.
+# (The former "--to <phase>" mode is gone: a run makes no phase commits, so there
+# was nothing to roll back to. To reset a run branch to a commit of your own, use
+# "archeflow-git.sh rollback <run_id> --to <phase> --yes" on a branch that has
+# commits made with "archeflow-git.sh phase-commit".)
 #
-# If --test-cmd not provided (and --to not used), reads test_command from .archeflow/config.yaml.
+# Without --test-cmd, the command is the one recorded for this
+# run by "archeflow-git.sh init" (.archeflow/runs/<run_id>/test-command), i.e. the
+# one the user saw when confirming the merge. If .archeflow/config.yaml now says
+# something else (it changed during the run, or the merge brought a new one),
+# nothing runs and the exit code is 2. Runs without a record (started by an
+# older version) fall back to test_command from .archeflow/config.yaml.
 #
 # Auto-revert only ever reverts the ArcheFlow merge commit of THIS run: HEAD must
 # be the commit that "archeflow-git.sh merge <run_id>" creates, i.e. its subject
-# is exactly "feat: archeflow run <run_id> complete" (squash or no-ff merge).
+# is exactly "archeflow: merge run <run_id>" (squash or no-ff merge), or the
+# subject older versions wrote, "feat: archeflow run <run_id> complete".
 # Otherwise the tests still run, but a failure is reported without reverting,
 # so a user's own commit is never reverted.
 #
-# Exit codes: 0 tests pass (or phase rollback succeeded); 1 tests failed and the
-# merge was reverted; 2 usage/config error; 3 tests failed, HEAD is not this
-# run's ArcheFlow merge commit, nothing reverted.
+# Exit codes: 0 tests pass; 1 tests failed and the merge was reverted; 2 usage or
+# config error (including a test command that exits 126/127: not found or not
+# executable; nothing is reverted); 3 tests failed, HEAD is not this run's
+# ArcheFlow merge commit, nothing reverted.
 case "${1:-}" in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"; exit 0 ;; esac
 
 set -euo pipefail
@@ -27,7 +35,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/archeflow-common.sh
 source "${SCRIPT_DIR}/archeflow-common.sh"
-RUN_ID="${1:?Usage: archeflow-rollback.sh <run_id> [--test-cmd <cmd>] [--to <phase>]}"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
+RUN_ID="${1:?Usage: archeflow-rollback.sh <run_id> [--test-cmd <cmd>]}"
 shift
 
 # Run IDs become file names under .archeflow/ (and git branch names).
@@ -35,58 +45,35 @@ af_require_run_id "$RUN_ID"
 
 # Parse options
 TEST_CMD=""
-TARGET_PHASE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --test-cmd) TEST_CMD="$2"; shift 2 ;;
-    --to) TARGET_PHASE="$2"; shift 2 ;;
+    --test-cmd)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "ERROR: --test-cmd needs a command." >&2; exit 2; }
+      TEST_CMD="$2"; shift 2 ;;
+    --to)
+      echo "ERROR: --to was removed: a run makes no phase commits. Use 'archeflow-git.sh rollback <run_id> --to <phase> --yes' on a branch with phase-commit commits." >&2
+      exit 2 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
-# Mutual exclusivity check
-if [[ -n "$TARGET_PHASE" && -n "$TEST_CMD" ]]; then
-  echo "ERROR: --to and --test-cmd are mutually exclusive." >&2
-  exit 2
-fi
-
-# --- Phase rollback mode ---
-if [[ -n "$TARGET_PHASE" ]]; then
-  # Validate phase name
-  case "$TARGET_PHASE" in
-    plan|do|check) ;;
-    *)
-      echo "ERROR: Invalid phase '$TARGET_PHASE'. Must be one of: plan, do, check" >&2
-      exit 2
-      ;;
-  esac
-
-  echo "Rolling back run $RUN_ID to phase boundary: $TARGET_PHASE"
-
-  # Delegate to archeflow-git.sh
-  if [[ ! -x "$SCRIPT_DIR/archeflow-git.sh" ]]; then
-    echo "ERROR: archeflow-git.sh not found or not executable" >&2
-    exit 1
-  fi
-
-  "$SCRIPT_DIR/archeflow-git.sh" rollback "$RUN_ID" --to "$TARGET_PHASE"
-
-  # Emit decision event
-  if [[ -x "$SCRIPT_DIR/archeflow-event.sh" ]]; then
-    "$SCRIPT_DIR/archeflow-event.sh" "$RUN_ID" decision act "" \
-      "{\"what\":\"phase_rollback\",\"chosen\":\"rollback_to_${TARGET_PHASE}\",\"rationale\":\"user requested rollback to ${TARGET_PHASE} phase boundary\"}" ""
-  fi
-
-  echo "Rollback to $TARGET_PHASE complete for run $RUN_ID."
-  exit 0
-fi
-
 # --- Post-merge test mode ---
 
-# Read test_command from config if not provided
+# Test command: the one recorded at run start, verified against the config.
 if [[ -z "$TEST_CMD" ]]; then
-  if [[ -f ".archeflow/config.yaml" ]]; then
-    TEST_CMD=$(grep -E "^test_command:" .archeflow/config.yaml | head -1 | sed 's/^test_command:[[:space:]]*//' | tr -d '"' || true)
+  RECORDED=".archeflow/runs/${RUN_ID}/test-command"
+  CURRENT="$(af_config_test_command 2>/dev/null || true)"
+  if [[ -f "$RECORDED" && ! -L "$RECORDED" ]]; then
+    TEST_CMD="$(cat -- "$RECORDED")"
+    if [[ "$CURRENT" != "$TEST_CMD" ]]; then
+      echo "ERROR: test_command changed since the run started." >&2
+      echo "  recorded at run start: ${TEST_CMD:-<none>}" >&2
+      echo "  config.yaml now:       ${CURRENT:-<none>}" >&2
+      echo "Refusing to run either. Review .archeflow/config.yaml, then run your tests yourself." >&2
+      exit 2
+    fi
+  else
+    TEST_CMD="$CURRENT"
   fi
 fi
 
@@ -97,9 +84,10 @@ fi
 
 # Only this run's ArcheFlow merge commit may be reverted (see header).
 HEAD_MSG=$(git log -1 --format=%s HEAD 2>/dev/null || true)
-EXPECTED_MSG="feat: archeflow run ${RUN_ID} complete"
+EXPECTED_MSG="archeflow: merge run ${RUN_ID}"
+LEGACY_MSG="feat: archeflow run ${RUN_ID} complete"
 CAN_REVERT=false
-if [[ "$HEAD_MSG" == "$EXPECTED_MSG" ]]; then
+if [[ "$HEAD_MSG" == "$EXPECTED_MSG" || "$HEAD_MSG" == "$LEGACY_MSG" ]]; then
   CAN_REVERT=true
 else
   echo "WARNING: HEAD is not the ArcheFlow merge commit for run ${RUN_ID} (subject: ${HEAD_MSG:-<none>})." >&2
@@ -124,9 +112,18 @@ _portable_timeout() {
   fi
 }
 
-if _portable_timeout 300 bash -c "$TEST_CMD"; then
+TEST_RC=0
+_portable_timeout 300 bash -c "$TEST_CMD" || TEST_RC=$?
+if [[ "$TEST_RC" -eq 0 ]]; then
   echo "Tests passed — merge is good."
   exit 0
+fi
+
+# 126/127: the command itself could not run (not found, not executable). That is
+# a configuration problem, not evidence that the merged code is broken.
+if [[ "$TEST_RC" -eq 126 || "$TEST_RC" -eq 127 ]]; then
+  echo "test command not found / not executable: $TEST_CMD — configuration problem, nothing reverted" >&2
+  exit 2
 fi
 
 if [[ "$CAN_REVERT" != "true" ]]; then
@@ -147,7 +144,7 @@ fi
 # Emit event if event script exists
 if [[ -x "$SCRIPT_DIR/archeflow-event.sh" ]]; then
   "$SCRIPT_DIR/archeflow-event.sh" "$RUN_ID" decision act "" \
-    "{\"what\":\"post_merge_test\",\"chosen\":\"revert\",\"rationale\":\"test suite failed after merge\"}" ""
+    "{\"what\":\"post_merge_test\",\"chosen\":\"revert\",\"rationale\":\"test suite failed after merge\"}"
 fi
 
 REVERT_HASH=$(git rev-parse --short HEAD)

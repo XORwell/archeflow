@@ -8,6 +8,7 @@
 #
 # Usage:
 #   archeflow-git.sh init <run_id>                        Create the run branch and switch to it
+#                                                         (resumes an existing run of the same id)
 #   archeflow-git.sh worktree <run_id>                    Create the Maker worktree, print its path
 #   archeflow-git.sh integrate <run_id>                   Merge the Maker's commits into the run branch
 #   archeflow-git.sh commit <run_id> <phase> <msg> [files...]  Stage run artifacts (+files) and commit
@@ -23,6 +24,18 @@
 #
 # Never prompts when stdin is not a terminal: destructive operations need --yes.
 # No force-push, and the base branch's history is never rewritten.
+#
+# ArcheFlow's own configuration never travels through a run:
+#   - init records test_command (runs/<run_id>/test-command) and a fingerprint of
+#     the trusted configuration (config.yaml, hooks.yaml, lenses/, lessons, ...)
+#     in runs/<run_id>/trusted-config;
+#   - integrate refuses Maker commits that touch .archeflow/ (reviewers never see
+#     those paths, and they would change what runs after the merge);
+#   - merge refuses when the run branch changes anything under .archeflow/ other
+#     than this run's own artifacts and event log, or when the trusted
+#     configuration in the working tree changed since init.
+# Every command refuses to run when .archeflow/ or one of its state directories
+# is a symlink.
 
 set -euo pipefail
 
@@ -55,7 +68,7 @@ info() {
 }
 
 usage() {
-  sed -n '9,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '9,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 # yaml_get <file> <key> [default]
@@ -229,6 +242,52 @@ is_merged_into() {
   [[ "$(git cherry "$base" "$tmp" 2>/dev/null)" == -* ]]
 }
 
+
+# Trusted configuration: files under .archeflow/ that decide what runs (test
+# command, hooks, auto_merge), what agents are told (lenses, lessons, roles) or
+# how the run is shaped. Fingerprinted at init, verified before merge.
+TRUSTED_PATHS=(config.yaml hooks.yaml lenses memory/lessons.jsonl archetypes domains teams patterns workflows multi-run.yaml queue.md)
+
+# One line per trusted file: "<blob-id>  <path>" (a symlink: "symlink:<target>  <path>").
+trusted_fingerprint() {
+  local p f
+  for p in "${TRUSTED_PATHS[@]}"; do
+    f="${ARCHEFLOW_DIR}/${p}"
+    if [[ -L "$f" ]]; then
+      printf 'symlink:%s  %s\n' "$(readlink -- "$f")" "$f"
+    elif [[ -f "$f" ]]; then
+      printf '%s  %s\n' "$(git hash-object --no-filters -- "$f")" "$f"
+    elif [[ -d "$f" ]]; then
+      while IFS= read -r -d '' f; do
+        if [[ -L "$f" ]]; then
+          printf 'symlink:%s  %s\n' "$(readlink -- "$f")" "$f"
+        else
+          printf '%s  %s\n' "$(git hash-object --no-filters -- "$f")" "$f"
+        fi
+      done < <(find "$f" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
+    fi
+  done
+}
+
+# Paths (NUL-separated input) under .archeflow/, matched case-insensitively
+# (".ARCHEFLOW/x" is the same directory on macOS and Windows). Prints one per line.
+# <allow-prefix>... : exact-case paths that are allowed and not printed.
+archeflow_paths() {
+  local path a allowed
+  while IFS= read -r -d '' path; do
+    shopt -s nocasematch
+    if [[ "$path" == .archeflow || "$path" == .archeflow/* ]]; then
+      shopt -u nocasematch
+      allowed=0
+      for a in "$@"; do
+        [[ "$path" == "$a" || ( "$a" == */ && "$path" == "$a"* ) ]] && { allowed=1; break; }
+      done
+      [[ "$allowed" -eq 1 ]] || printf '%s\n' "$path"
+    fi
+    shopt -u nocasematch
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -240,8 +299,21 @@ cmd_init() {
   current_branch=$(git branch --show-current 2>/dev/null || true)
   [[ -n "$current_branch" ]] || die "Detached HEAD: check out the base branch before starting a run."
 
+  # Resume (--dry-run, then --start-from): the run branch exists and this
+  # run's metadata says it was created by "init <run_id>". Switch to it (if the
+  # tree is clean) and keep the records from the first init: the test command
+  # and configuration fingerprint are the ones from the run's start.
   if branch_exists "$branch"; then
-    die "Branch '${branch}' already exists. Use a different run_id or clean up first."
+    local base_file="${ARCHEFLOW_DIR}/runs/${run_id}/base-branch"
+    if [[ -f "$base_file" && ! -L "$base_file" ]]; then
+      if [[ "$current_branch" != "$branch" ]]; then
+        has_uncommitted_changes && die "Uncommitted changes in tracked files. Commit or stash them before resuming run ${run_id}."
+        git checkout --quiet "$branch" --
+      fi
+      info "Resuming run ${run_id} on existing branch ${branch} (base: $(get_base_branch "$run_id"))"
+      return 0
+    fi
+    die "Branch '${branch}' already exists but has no run metadata (${base_file}). Use a different run_id or clean up first."
   fi
 
   # Refuse instead of stashing: a silent stash is never restored and looks like data loss.
@@ -252,9 +324,15 @@ cmd_init() {
   git checkout --quiet -b "$branch"
   info "Created and switched to branch: ${branch}"
 
-  mkdir -p "${ARCHEFLOW_DIR}/runs/${run_id}"
-  af_refuse_symlink "${ARCHEFLOW_DIR}/runs/${run_id}/base-branch" || die "Refusing to write run metadata."
-  echo "$current_branch" > "${ARCHEFLOW_DIR}/runs/${run_id}/base-branch"
+  local run_dir="${ARCHEFLOW_DIR}/runs/${run_id}"
+  mkdir -p "$run_dir"
+  af_refuse_symlink "${run_dir}/base-branch" && af_refuse_symlink "${run_dir}/test-command" \
+    && af_refuse_symlink "${run_dir}/trusted-config" || die "Refusing to write run metadata."
+  echo "$current_branch" > "${run_dir}/base-branch"
+  # The test command the user sees and confirms for this run; archeflow-rollback.sh
+  # runs this recorded value and refuses if the config says something else later.
+  af_config_test_command > "${run_dir}/test-command" 2>/dev/null || : > "${run_dir}/test-command"
+  trusted_fingerprint > "${run_dir}/trusted-config"
 
   maybe_push "$branch"
   info "Init complete for run: ${run_id} (base: ${current_branch})"
@@ -321,6 +399,15 @@ cmd_integrate() {
   ahead=$(git rev-list --count "${branch}..${wt_branch}")
   if [[ "$ahead" == "0" ]]; then
     die "The Maker made no commits on '${wt_branch}'. Nothing to integrate (worktree kept: ${path:-none})."
+  fi
+
+  # The Maker never changes ArcheFlow's own files: the review diff excludes
+  # .archeflow/, and config, hooks, lenses and lessons there decide what runs
+  # after the merge and what later runs are told.
+  local touched
+  touched=$(git diff -z --name-only --no-renames "${branch}...${wt_branch}" -- | archeflow_paths)
+  if [[ -n "$touched" ]]; then
+    die "The Maker's commits change ArcheFlow's own files, which reviewers never see and which are never merged: $(tr '\n' ' ' <<<"$touched")-- nothing was integrated. Inspect branch '${wt_branch}' and drop those changes (or discard the Maker's work) before integrating."
   fi
 
   if ! git_signed merge --quiet --no-ff --no-edit \
@@ -462,7 +549,29 @@ cmd_merge() {
     die "'${branch}' has no commits that are not already in '${base_branch}' (already merged, or no changes). Nothing to merge."
   fi
 
-  local commit_msg="feat: archeflow run ${run_id} complete"
+  # Nothing under .archeflow/ reaches the base branch except this run's own
+  # artifacts and event log (committed by 'commit'/'phase-commit').
+  local touched
+  touched=$(git diff -z --name-only --no-renames "${base_branch}...${branch}" -- \
+    | archeflow_paths "${ARCHEFLOW_DIR}/artifacts/${run_id}/" "${ARCHEFLOW_DIR}/events/${run_id}.jsonl")
+  if [[ -n "$touched" ]]; then
+    die "'${branch}' changes ArcheFlow's own files: $(tr '\n' ' ' <<<"$touched")-- refusing to merge them into '${base_branch}'. Remove those changes from the run branch, then merge."
+  fi
+
+  # The configuration the run started with (test_command, hooks, auto_merge,
+  # lenses, lessons) must still be in place: an agent could have rewritten it
+  # in the working tree during the run.
+  local fp_file="${ARCHEFLOW_DIR}/runs/${run_id}/trusted-config" changed
+  if [[ -f "$fp_file" ]]; then
+    changed=$(diff <(cat "$fp_file") <(trusted_fingerprint) | sed -n 's/^[<>] [^ ]*  //p' | sort -u || true)
+    if [[ -n "$changed" ]]; then
+      die "ArcheFlow configuration changed since the run started: $(tr '\n' ' ' <<<"$changed")-- refusing to merge. Review the change; if you made it, start a new run."
+    fi
+  else
+    info "Warning: no configuration fingerprint for run ${run_id} (started by an older version); not verified."
+  fi
+
+  local commit_msg="archeflow: merge run ${run_id}"
 
   # rebase: replay the RUN branch onto base (while still on the run branch),
   # then fast-forward base. Base history is never rewritten.
@@ -682,6 +791,7 @@ cmd_cleanup() {
     git branch --quiet -D "$wt_branch" 2>/dev/null || true
   fi
 
+  af_refuse_symlink "${ARCHEFLOW_DIR}/runs/${run_id}" || die "Refusing to delete run metadata through a symlink."
   rm -rf "${ARCHEFLOW_DIR}/runs/${run_id}"
   info "Cleaned up run metadata for: ${run_id}"
 }
@@ -707,6 +817,9 @@ main() {
   shift 2
   # Run IDs become file names under .archeflow/ and git branch names.
   af_require_run_id "$run_id"
+  # A committed ".archeflow -> elsewhere" (or events/, worktrees/, runs/ ...)
+  # would redirect every write and the cleanup's rm -rf.
+  af_check_state_dirs "$ARCHEFLOW_DIR"
 
   load_config
 

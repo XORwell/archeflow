@@ -61,7 +61,8 @@ There are no other hook points; other keys in `hooks.yaml` are ignored (say so i
 
 Hooks are run by the orchestrating agent, not by a script. The file comes from the repository,
 so show each hook command to the user and get a yes before its first run in a session; never run
-a hook the user declined. To run one, write its `command` to
+a hook the user declined. The yes covers that exact command text: if `hooks.yaml` changed since
+(during a run, or after a pull), show the new command and ask again. To run one, write its `command` to
 `.archeflow/artifacts/<run_id>/hook.sh` with your file tool, then from the project root:
 `ARCHEFLOW_RUN_ID=<run_id> <other variables> bash .archeflow/artifacts/<run_id>/hook.sh`.
 

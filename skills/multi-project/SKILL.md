@@ -40,6 +40,14 @@ budget:
   per_project_usd: 10.00
 ```
 
+**Approval (the file can come with the repository).** Before starting any sub-run, show the user
+the whole plan: for every project its `id`, the resolved absolute path, the full `task` text,
+workflow and domain, plus the budget. Start nothing without a yes for that plan in this session;
+if the file changes, ask again. Refuse a project whose `path` contains characters other than
+letters, digits, `.`, `_`, `-` and `/`, or does not resolve to an existing git repository inside
+the workspace root. Never type a path or task from the file into a shell command: change
+directory with the agent's working-directory setting, or quote the validated absolute path.
+
 **Rules:** Unique `id` per project. `depends_on` references other `id` values. Cycles rejected at validation. At least one project must have empty `depends_on`. `workflow` and `domain` auto-select if omitted.
 
 ## Dependency Resolution
@@ -57,7 +65,7 @@ Cycle detection via Kahn's algorithm. If sorted list is shorter than project lis
 
 ## Parallel Execution
 
-For each ready project, start a sub-run as a parallel subagent that works in that project's directory (`cd <path>` first; do not use `isolation: "worktree"`, which would isolate the session's repository, not the project). Each sub-run follows `archeflow:run` with its own run_id, workflow, domain and budget slice; the run creates its own branch and Maker worktree inside the project.
+For each ready project of the approved plan, start a sub-run as a parallel subagent that works in that project's directory (the validated absolute path; do not use `isolation: "worktree"`, which would isolate the session's repository, not the project). Each sub-run follows `archeflow:run` with its own run_id, workflow, domain and budget slice; the run creates its own branch and Maker worktree inside the project.
 
 When `parallel: false`, run sequentially in topological order.
 

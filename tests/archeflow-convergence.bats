@@ -306,3 +306,67 @@ MD
   [ "$status" -eq 1 ]
   jq -e '.wiggum_break == false' <<<"$output"
 }
+
+# ── oscillation inside wiggum-check; break logged as an event ─────────────
+
+_osc() {  # <run> <N> <ids...>: findings-cycle-<N>.json with these ids
+  local run="$1" n="$2"; shift 2
+  mkdir -p ".archeflow/artifacts/$run"
+  printf '%s\n' "$@" | jq -R '{id: ., file: "x", category: "c", severity: "WARNING"}' | jq -s . \
+    > ".archeflow/artifacts/$run/findings-cycle-$n.json"
+}
+
+@test "wiggum-check: 2 findings present -> absent -> present over cycles 1-3 are a hard break" {
+  _osc r-osc 1 a:security b:testing
+  _osc r-osc 2 c:quality
+  _osc r-osc 3 a:security b:testing
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check r-osc
+  [ "$status" -eq 0 ]
+  jq -e '.wiggum_break == true and .type == "hard"' <<<"$output"
+  [[ "$output" == *"2 findings oscillate across cycles 1-3"* ]]
+}
+
+@test "wiggum-check: one oscillating finding, or non-consecutive cycles, is no oscillation break" {
+  _osc r-osc1 1 a:security b:testing
+  _osc r-osc1 2 b:testing
+  _osc r-osc1 3 a:security
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check r-osc1
+  [ "$status" -eq 1 ]
+  _osc r-osc2 1 a:security b:testing
+  _osc r-osc2 2 c:quality
+  _osc r-osc2 4 a:security b:testing
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check r-osc2
+  [[ "$output" != *"oscillate"* ]]
+}
+
+@test "wiggum-check: only the last three cycles are compared" {
+  _osc r-osc3 1 a:security b:testing
+  _osc r-osc3 2 c:quality
+  _osc r-osc3 3 a:security b:testing
+  _osc r-osc3 4 d:design
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check r-osc3
+  [[ "$output" != *"oscillate"* ]]
+}
+
+@test "wiggum-check <run_id>: a break is logged as a wiggum.break event with the printed JSON" {
+  "$LIB_DIR/archeflow-event.sh" r-wb run.start plan "" '{"task":"x"}' 2>/dev/null
+  "$LIB_DIR/archeflow-event.sh" r-wb decision act "" \
+    '{"what":"post_merge_test","chosen":"revert"}' 2>/dev/null
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check r-wb
+  [ "$status" -eq 0 ]
+  jq -se 'last | .type == "wiggum.break" and .data.type == "hard" and (.data.triggers | length) >= 1 and .parent == [1]' \
+    .archeflow/events/r-wb.jsonl
+}
+
+@test "wiggum-check: no event without a break, and none for a directory argument" {
+  "$LIB_DIR/archeflow-event.sh" r-nb run.start plan "" '{"task":"x"}' 2>/dev/null
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check r-nb
+  [ "$status" -eq 1 ]
+  [ "$(wc -l < .archeflow/events/r-nb.jsonl | tr -d ' ')" -eq 1 ]
+  mkdir -p .archeflow/artifacts/r-dir2
+  echo '{"convergence_score":0.3}' > .archeflow/artifacts/r-dir2/convergence-cycle-2.json
+  echo '{"convergence_score":0.2}' > .archeflow/artifacts/r-dir2/convergence-cycle-3.json
+  run "$LIB_DIR/archeflow-convergence.sh" wiggum-check .archeflow/artifacts/r-dir2
+  [ "$status" -eq 0 ]
+  [ ! -f .archeflow/events/r-dir2.jsonl ]
+}

@@ -64,7 +64,15 @@ Those were never part of the plugin; use the table above.
 - Defaults: `git.merge_strategy: no-ff` (one revertable merge commit per run; `squash` and
   `rebase` are options), `git.auto_merge: false`, `test_command` unset. `test_command` is a
   top-level key in `.archeflow/config.yaml`; when unset, post-merge tests are skipped.
-- Nothing under `.archeflow/` is committed by a run unless `git.commit_artifacts: true`.
+- Nothing under `.archeflow/` is committed by a run. `/archeflow:init` writes a
+  `.archeflow/.gitignore` that keeps run state local: `events/`, `artifacts/`, `runs/`,
+  `worktrees/`, `memory/`, review diffs, `progress.md`, the A2A card, locks and `langfuse.env`.
+  The configuration (`config.yaml`, `hooks.yaml`, `teams/`, `workflows/`, `domains/`, `lenses/`)
+  can be committed.
+- The merge commit of a run is titled `archeflow: merge run <run_id>`.
+- Default cycle limits: `fast` 1, `standard` 2, `thorough` 3. Convergence is scored from cycle 2;
+  oscillation and "convergence below 0.5 twice" need 3 cycles, so they can only fire in
+  `thorough`, at its last cycle.
 - The Maker's worktree is `.archeflow/worktrees/<run_id>/` (branch `archeflow/<run_id>-maker`).
 - Agents inherit the session's permission mode; no skill requests a bypass mode.
 - Hooks: `.archeflow/hooks.yaml`, one top-level key per hook. Exactly four hook points exist,
@@ -76,7 +84,8 @@ Those were never part of the plugin; use the table above.
 - Workflows: only `fast`, `standard`, `thorough` (`--workflow`, or `workflow:` in
   `config.yaml`). Files in `.archeflow/workflows/` and `.archeflow/teams/` that bundles copy are
   not read by the run.
-- Bundles: `archeflow-init.sh` writes the bundle's `costs.budget_usd` into
+- Bundles: `archeflow-init.sh` writes the bundle's `workflow:` (`quick-fix`: fast,
+  `backend-feature`: standard, `security-review`: thorough) and `costs.budget_usd` into
   `.archeflow/config.yaml`.
 - Sprint mode is `ATTENDED` unless you ask for `AUTONOMOUS` in the session; `mode` in
   `queue.json` can pause a sprint but cannot make it autonomous. Items with status `proposed`

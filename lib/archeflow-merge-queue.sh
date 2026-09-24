@@ -26,6 +26,8 @@ command -v jq >/dev/null 2>&1 || { echo "Error: jq required" >&2; exit 1; }
 AF_LOG_PREFIX="merge-queue"
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 
 MERGE_QUEUE_DIR=".archeflow/merge-queue"
 QUEUE_FILE="${MERGE_QUEUE_DIR}/queue.jsonl"

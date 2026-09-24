@@ -25,9 +25,12 @@ BUILTIN_TEMPLATES="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/templates"
 
 # --- Helpers ----------------------------------------------------------------
 
+# shellcheck disable=SC2034  # read by die() in archeflow-common.sh
 AF_LOG_PREFIX=""
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
+# Refuse a symlinked .archeflow/ (or events/, runs/, memory/ ...): writes would land outside the repo.
+af_check_state_dirs
 warn() { echo "WARNING: $*" >&2; }
 info() { echo "  $*"; }
 
@@ -97,14 +100,24 @@ safe_include_name() {
   fi
 }
 
-# Keep secrets and runtime state out of the user's git: sprint agents commit
-# "all changes", and langfuse.env holds API keys. Appends missing rules only.
+# Keep secrets and run state out of the user's git: sprint agents commit "all
+# changes", and langfuse.env holds API keys. Run state is local by default:
+# events, artifacts, run metadata, the Maker's worktrees, memory (lessons are
+# injected into prompts), review diffs, progress snapshots and the A2A card.
+# Configuration (config.yaml, hooks.yaml, teams/, workflows/, domains/, lenses/,
+# archetypes/, patterns/) stays trackable. Appends missing rules only.
+AF_GITIGNORE_RULES=("langfuse.env" "*.errors.log" "*.lock" "*.lock.d/" "locks/"
+  "events/" "artifacts/" "runs/" "worktrees/" "memory/"
+  "review*.diff" "progress.md" "agent-card.json")
 ensure_gitignore() {
   local gi=".archeflow/.gitignore" rule
   mkdir -p .archeflow
   af_refuse_symlink "$gi" || return 0
-  for rule in "langfuse.env" "*.errors.log" "*.lock" "*.lock.d/" "locks/"; do
-    if [[ ! -f "$gi" ]] || ! grep -qxF -- "$rule" "$gi"; then
+  if [[ ! -f "$gi" ]]; then
+    printf '%s\n' "# ArcheFlow run state and secrets stay local; commit the configuration." > "$gi"
+  fi
+  for rule in "${AF_GITIGNORE_RULES[@]}"; do
+    if ! grep -qxF -- "$rule" "$gi"; then
       printf '%s\n' "$rule" >> "$gi"
     fi
   done
@@ -354,12 +367,19 @@ cmd_init_bundle() {
       done < <(printf '%s\n' "${!vars[@]}" | sort)
     fi
 
-    # Carry the bundle's budget (costs.budget_usd in its config.yaml) into the
-    # project config, where archeflow-convergence.sh wiggum-check reads it.
-    local cfg_inc budget warn_pct
+    # Carry the bundle's workflow (read by the run skill) and budget
+    # (costs.budget_usd, read by archeflow-convergence.sh wiggum-check) from its
+    # config.yaml into the project config.
+    local cfg_inc budget warn_pct workflow
     cfg_inc="$(yaml_value "$manifest" "includes.config" 2>/dev/null || true)"
     [[ -z "$cfg_inc" ]] || safe_include_name "$cfg_inc" config || cfg_inc=""
     if [[ -n "$cfg_inc" && -f "$bundle_dir/$cfg_inc" ]]; then
+      workflow="$(yaml_value "$bundle_dir/$cfg_inc" "workflow" 2>/dev/null || true)"
+      case "$workflow" in
+        fast|standard|thorough) echo "workflow: $workflow" ;;
+        "") ;;
+        *) warn "Ignoring unknown workflow in bundle config: '$workflow' (fast, standard or thorough)" ;;
+      esac
       budget="$(yaml_value "$bundle_dir/$cfg_inc" "costs.budget_usd" 2>/dev/null || true)"
       warn_pct="$(yaml_value "$bundle_dir/$cfg_inc" "costs.warn_at_percent" 2>/dev/null || true)"
       if [[ "$budget" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then

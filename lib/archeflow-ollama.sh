@@ -2,10 +2,13 @@
 # archeflow-ollama.sh — Call a local Ollama API for ArcheFlow archetype turns (no cloud tokens).
 #
 # Requires: curl, jq. Ollama daemon running (ollama serve).
-# Env:
-#   ARCHEFLOW_OLLAMA_BASE_URL — full base URL (wins over OLLAMA_HOST; set from config models.ollama.base_url)
+# Base URL, first found of:
+#   ARCHEFLOW_OLLAMA_BASE_URL — full base URL from your own shell
 #                               (legacy spelling ARCHFLOW_OLLAMA_BASE_URL is still honored as a fallback)
+#   models.ollama.base_url in .archeflow/config.yaml — read by this script itself, so the
+#                               value never passes through a shell command line
 #   OLLAMA_HOST — host:port or http(s)://host:port (default 127.0.0.1:11434; Ollama CLI convention)
+# Env:
 #   ARCHEFLOW_OLLAMA_ALLOW_REMOTE=1 — permit a non-loopback host. Without it, only
 #                               localhost / 127.x / [::1] / 0.0.0.0 are contacted: the
 #                               base URL usually comes from .archeflow/config.yaml, which
@@ -16,20 +19,53 @@
 #   archeflow-ollama.sh health
 #   archeflow-ollama.sh tags
 #   archeflow-ollama.sh chat <model> [--system-file FILE]   # user prompt on stdin
+#   archeflow-ollama.sh chat --tier <haiku|sonnet|opus> [--system-file FILE]
+#       model from models.mapping.<tier> in .archeflow/config.yaml (defaults qwen3:8b,
+#       qwen3:14b, qwen3:14b). Model names must match [A-Za-z0-9][A-Za-z0-9._:/-]*.
 case "${1:-}" in -h|--help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"; exit 0 ;; esac
 
 set -euo pipefail
 
+# shellcheck source=lib/archeflow-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"
+
 usage() {
-  sed -n '1,13p' "$0" | tail -n +2
+  sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "${BASH_SOURCE[0]}"
   echo "Commands:"
   echo "  health              GET /api/tags (exit 0 if Ollama responds)"
   echo "  tags                List model names (one per line)"
   echo "  chat <model> [--system-file PATH]   Read user message from stdin; print assistant text"
+  echo "  chat --tier <haiku|sonnet|opus> [--system-file PATH]   Model from models.mapping in config"
+}
+
+# A config value read with af_config_json (never through a shell line). Prints "" if unset.
+_config_value() {
+  local cfg
+  cfg="$(af_config_json 2>/dev/null)" || { echo "archeflow-ollama: could not parse .archeflow/config.yaml" >&2; return 1; }
+  jq -r "$1 // empty | if type == \"string\" then . else tostring end" <<<"$cfg"
+}
+
+_valid_model() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ && "$1" != *..* ]]
+}
+
+# Model tag for a tier from models.mapping, with ArcheFlow's defaults.
+_model_for_tier() {
+  local tier="$1" def m
+  case "$tier" in
+    haiku) def="qwen3:8b" ;;
+    sonnet|opus) def="qwen3:14b" ;;
+    *) echo "archeflow-ollama: unknown tier '${tier}' (haiku, sonnet or opus)" >&2; return 1 ;;
+  esac
+  m="$(_config_value ".models.mapping.${tier}")" || return 1
+  printf '%s\n' "${m:-$def}"
 }
 
 ollama_base_url() {
   local h="${ARCHEFLOW_OLLAMA_BASE_URL:-${ARCHFLOW_OLLAMA_BASE_URL:-}}"
+  if [[ -z "$h" ]]; then
+    h="$(_config_value '.models.ollama.base_url')" || return 1
+  fi
   if [[ -z "$h" ]]; then
     h="${OLLAMA_HOST:-127.0.0.1:11434}"
   fi
@@ -85,9 +121,18 @@ cmd_chat() {
   local model system="" user_msg payload base resp err
   model="${1:-}"
   shift || true
+  if [[ "$model" == "--tier" ]]; then
+    [[ $# -ge 1 ]] || { echo "archeflow-ollama: --tier requires haiku, sonnet or opus" >&2; return 1; }
+    model="$(_model_for_tier "$1")" || return 1
+    shift
+  fi
   if [[ -z "$model" ]]; then
     echo "archeflow-ollama: chat requires a model name" >&2
     usage >&2
+    return 1
+  fi
+  if ! _valid_model "$model"; then
+    echo "archeflow-ollama: invalid model name '${model}'" >&2
     return 1
   fi
   while [[ $# -gt 0 ]]; do

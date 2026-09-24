@@ -114,11 +114,12 @@ EOF2
   [ "$status" -eq 0 ]
   [[ "$output" == *"Downgrades: 2"* ]]
   grep -qF '| src/auth/handler.ts:48 | CRITICAL | security |' review.md
-  grep -qF '| src/auth/session.ts | INFO | reliability | Session cleanup is not robust enough for production | Add a TTL sweep |' review.md
-  grep -qF '| src/cache/store.py | INFO | reliability | Cache might be stale under concurrent writes | Add a write lock |' review.md
+  grep -qF '| src/auth/session.ts | INFO (downgraded: no evidence; original in review.md.orig) | reliability | Session cleanup is not robust enough for production | Add a TTL sweep |' review.md
+  grep -qF '| src/cache/store.py | INFO (downgraded: hedge without evidence; original in review.md.orig) | reliability | Cache might be stale under concurrent writes | Add a write lock |' review.md
   grep -qF '### Verdict: REJECTED' review.md
   # Only the two severity cells changed.
   [ "$(diff before.md review.md | grep -c '^>')" -eq 2 ]
+  cmp -s before.md review.md.orig                     # the original is kept
 
   # Idempotent: a second pass finds nothing left to downgrade.
   run "$LIB_DIR/archeflow-evidence.sh" validate review.md
@@ -149,7 +150,7 @@ EOF2
   run "$LIB_DIR/archeflow-evidence.sh" validate review.md
   [ "$status" -eq 0 ]
   [[ "$output" == *"hedge_without_evidence"* ]]
-  grep -qF '| 1 | guardian | src/auth | **INFO** | security |' review.md
+  grep -qF '| 1 | guardian | src/auth | **INFO (downgraded: hedge without evidence; original in review.md.orig)** | security |' review.md
 }
 
 @test "block: Skeptic challenge without evidence is downgraded in place" {
@@ -170,7 +171,7 @@ EOF2
   run "$LIB_DIR/archeflow-evidence.sh" validate review.md
   [ "$status" -eq 0 ]
   [[ "$output" == *"Findings: 2 | Downgrades: 1"* ]]
-  grep -qF '**Impact:** INFO' review.md
+  grep -qF '**Impact:** INFO (downgraded: hedge without evidence; original in review.md.orig)' review.md
   grep -qF '**Impact:** CRITICAL' review.md
 }
 
@@ -181,7 +182,7 @@ The allocation pattern looks unusual
 EOF2
   run "$LIB_DIR/archeflow-evidence.sh" validate review.md
   [ "$status" -eq 0 ]
-  [ "$(head -1 review.md)" = "INFO: This could potentially cause a memory leak" ]
+  [ "$(head -1 review.md)" = "INFO (downgraded: hedge without evidence; original in review.md.orig): This could potentially cause a memory leak" ]
 }
 
 @test "validate: refuses to rewrite through a symlink" {
