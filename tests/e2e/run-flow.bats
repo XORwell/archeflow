@@ -15,6 +15,10 @@ setup() {
   ROOT="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
   SKILL="$ROOT/skills/run/SKILL.md"
   WORK="$(mktemp -d)"
+  # Hermetic home: no user templates, no Langfuse config from ~/.config.
+  E2E_HOME="$(mktemp -d)"
+  export HOME="$E2E_HOME"
+  unset XDG_CONFIG_HOME
   cd "$WORK"
   git init --quiet
   git config user.email "e2e@test"
@@ -27,7 +31,7 @@ setup() {
 
 teardown() {
   cd /
-  rm -rf "$WORK" "$EXECUTED"
+  rm -rf "$WORK" "$EXECUTED" "$E2E_HOME"
 }
 
 # Every command in skills/run/SKILL.md, by key (script + subcommand).
