@@ -45,26 +45,22 @@ resolve() {
   fi
 }
 
+# One "  name  description" line per lens file in <dir>.
+_list_lenses() {
+  local f
+  for f in "$1"/*.yaml; do
+    [[ -f "$f" ]] || continue
+    printf "  %-20s %s\n" "$(basename "$f" .yaml)" "$(af_yaml_get "$f" description)"
+  done
+}
+
 cmd_list() {
   echo "Built-in lenses:"
-  for f in "$BUILTIN_DIR"/*.yaml; do
-    [[ -f "$f" ]] || continue
-    local name desc
-    name="$(basename "$f" .yaml)"
-    desc="$(grep -m1 '^description:' "$f" | sed 's/^description: *//')"
-    printf "  %-20s %s\n" "$name" "$desc"
-  done
-
+  _list_lenses "$BUILTIN_DIR"
   if [[ -d "$PROJECT_DIR" ]]; then
     echo ""
     echo "Project lenses:"
-    for f in "$PROJECT_DIR"/*.yaml; do
-      [[ -f "$f" ]] || continue
-      local name desc
-      name="$(basename "$f" .yaml)"
-      desc="$(grep -m1 '^description:' "$f" | sed 's/^description: *//')"
-      printf "  %-20s %s\n" "$name" "$desc"
-    done
+    _list_lenses "$PROJECT_DIR"
   fi
 }
 
@@ -81,7 +77,7 @@ cmd_validate() {
   file="$(resolve "$name")"
 
   for field in name description version; do
-    if ! grep -q "^${field}:" "$file"; then
+    if [[ -z "$(af_yaml_get "$file" "$field")" ]]; then
       echo "MISSING: $field" >&2
       errors=$((errors + 1))
     fi
@@ -187,8 +183,7 @@ cmd_merge() {
     local file
     file="$(resolve "$name")" || exit 1
 
-    # YAML -> JSON (af_yaml_to_json): yq, python3+PyYAML, else the built-in
-    # converter, so lens merging works on a stock runner with only bash/awk/jq.
+    # YAML -> JSON with the built-in converter (bash/awk/jq only).
     local json
     json="$(af_yaml_to_json "$file")" || { echo "error: could not parse lens $file" >&2; exit 1; }
 

@@ -22,26 +22,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/archeflow-common.sh"
 ARCHEFLOW_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENTS_DIR="${ARCHEFLOW_DIR}/agents"
-CONFIG_FILE=".archeflow/config.yaml"
 DEFAULT_OUTPUT=".archeflow/agent-card.json"
 
 # --- Helpers ---
 
-yaml_get() {
-  local file="$1" key="$2" default="${3:-}"
-  if [[ -f "$file" ]]; then
-    local val
-    val=$(grep -E "^\s*${key}:" "$file" 2>/dev/null | head -1 | sed 's/^[^:]*:\s*//' | sed 's/\s*#.*//' | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
-    [[ -n "$val" && "$val" != "null" ]] && { echo "$val"; return; }
-  fi
-  echo "$default"
-}
-
-parse_frontmatter() {
-  local file="$1" key="$2"
-  awk '/^---$/{n++; next} n==1' "$file" | grep -E "^\s*${key}:" | head -1 \
-    | sed 's/^[^:]*:\s*//' | sed 's/\s*#.*//' | sed 's/^|$//' \
-    | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+# Frontmatter of an agent file as JSON ("{}" when absent or unparseable).
+frontmatter_json() {
+  local json
+  json=$(awk '/^---$/{n++; next} n==1' "$1" | af_yaml_to_json - 2>/dev/null) || json='{}'
+  printf '%s\n' "${json:-"{}"}"
 }
 
 parse_body_section() {
@@ -102,7 +91,7 @@ cmd_generate() {
   done
 
   local version
-  version=$(yaml_get "$CONFIG_FILE" "version" "0.9.0")
+  version=$(af_config_get version 0.9.0)
 
   # Build skills array from agent markdown files
   local skills="[]"
@@ -110,15 +99,13 @@ cmd_generate() {
   for agent_file in "${AGENTS_DIR}"/*.md; do
     [[ -f "$agent_file" ]] || continue
 
-    local name desc lens shadow phase tags examples
-    name=$(parse_frontmatter "$agent_file" "name")
+    local fm name desc lens shadow phase tags examples
+    fm=$(frontmatter_json "$agent_file")
+    name=$(jq -r '.name | strings' <<<"$fm")
     [[ -z "$name" ]] && continue
 
-    # Extract first line of description from frontmatter
-    desc=$(awk '/^---$/{n++; next} n==1 && /description:/{found=1; next} found && /^  [A-Z]/{gsub(/^[[:space:]]+/,""); print; exit}' "$agent_file")
-    if [[ -z "$desc" ]]; then
-      desc=$(parse_frontmatter "$agent_file" "description")
-    fi
+    # First non-blank line of the description (a block scalar spans several)
+    desc=$(jq -r '.description | strings | split("\n") | map(select(test("[^[:space:]]"))) | .[0] // empty' <<<"$fm")
 
     lens=$(parse_body_section "$agent_file" "Your Lens" | head -1 | sed 's/^"//;s/"$//')
     shadow=$(parse_body_section "$agent_file" "Shadow:" | head -1)

@@ -44,7 +44,6 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC2034  # read by die() in archeflow-common.sh
 AF_LOG_PREFIX="archeflow-git"
 # shellcheck source=lib/archeflow-common.sh
 source "${SCRIPT_DIR}/archeflow-common.sh"
@@ -71,36 +70,6 @@ usage() {
   sed -n '9,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
-# yaml_get <file> <key> [default]
-# Value of <key> inside the top-level "git:" block, else of a top-level <key>.
-# Nested keys elsewhere (e.g. variables.signing_key) are never matched.
-# Strips trailing comments and surrounding quotes. POSIX awk only.
-yaml_get() {
-  local file="$1" key="$2" default="${3:-}" val=""
-  if [[ -f "$file" ]]; then
-    val=$(awk -v k="$key" '
-      function clean(s) {
-        sub(/^[[:space:]]+/, "", s)
-        sub(/[[:space:]]+#.*$/, "", s)
-        sub(/[[:space:]]+$/, "", s)
-        if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2)
-        return s
-      }
-      /^[^[:space:]#]/ { in_git = ($0 ~ /^git:[[:space:]]*(#.*)?$/) }
-      {
-        if (in_git && !g && match($0, "^[[:space:]]+" k ":")) { gv = clean(substr($0, RLENGTH + 1)); g = 1 }
-        else if (!t && match($0, "^" k ":")) { tv = clean(substr($0, RLENGTH + 1)); t = 1 }
-      }
-      END { if (g) print gv; else if (t) print tv }
-    ' "$file" 2>/dev/null) || val=""
-  fi
-  if [[ -n "$val" && "$val" != "null" && "$val" != "~" ]]; then
-    printf '%s\n' "$val"
-  else
-    printf '%s\n' "$default"
-  fi
-}
-
 # Branch prefix: a plain ref-name prefix. A leading "+" would turn
 # "git push origin <branch>" into a forced push, a leading "-" into an option.
 valid_prefix() {
@@ -119,11 +88,11 @@ valid_branch() {
 
 load_config() {
   if [[ -f "$CONFIG_FILE" ]]; then
-    BRANCH_PREFIX=$(yaml_get "$CONFIG_FILE" "branch_prefix" "$BRANCH_PREFIX")
-    COMMIT_STYLE=$(yaml_get "$CONFIG_FILE" "commit_style" "$COMMIT_STYLE")
-    MERGE_STRATEGY=$(yaml_get "$CONFIG_FILE" "merge_strategy" "$MERGE_STRATEGY")
-    AUTO_PUSH=$(yaml_get "$CONFIG_FILE" "auto_push" "$AUTO_PUSH")
-    SIGNING_KEY=$(yaml_get "$CONFIG_FILE" "signing_key" "$SIGNING_KEY")
+    BRANCH_PREFIX=$(af_yaml_get "$CONFIG_FILE" "git.branch_prefix|branch_prefix" "$BRANCH_PREFIX")
+    COMMIT_STYLE=$(af_yaml_get "$CONFIG_FILE" "git.commit_style|commit_style" "$COMMIT_STYLE")
+    MERGE_STRATEGY=$(af_yaml_get "$CONFIG_FILE" "git.merge_strategy|merge_strategy" "$MERGE_STRATEGY")
+    AUTO_PUSH=$(af_yaml_get "$CONFIG_FILE" "git.auto_push|auto_push" "$AUTO_PUSH")
+    SIGNING_KEY=$(af_yaml_get "$CONFIG_FILE" "git.signing_key|signing_key" "$SIGNING_KEY")
   fi
   valid_prefix "$BRANCH_PREFIX" \
     || die "Invalid git.branch_prefix '${BRANCH_PREFIX}' (allowed: letters, digits, '.', '_', '/', '-'; must start with a letter or digit)."

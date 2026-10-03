@@ -30,6 +30,8 @@ set -euo pipefail
 command -v jq >/dev/null 2>&1 || { echo "Error: jq is required. Install: https://jqlang.github.io/jq/" >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/archeflow-common.sh
+source "${SCRIPT_DIR}/archeflow-common.sh"
 
 usage() {
     local code="${1:-2}"
@@ -374,8 +376,7 @@ wiggum_check() {
         local budget="" cfg
         for cfg in ".archeflow/config.yaml" "${run_dir:-.}/../config.yaml" "${run_dir:-.}/../../config.yaml"; do
             [[ -f "$cfg" ]] || continue
-            budget=$(grep -E '^[[:space:]]*budget_usd:' "$cfg" 2>/dev/null | head -1 \
-                | sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*#.*$//; s/["'"'"']//g') || budget=""
+            budget=$(af_yaml_get "$cfg" "costs.budget_usd|budget_usd")
             [[ -n "$budget" ]] && break
         done
         [[ "$budget" =~ ^[0-9]*\.?[0-9]+$ ]] || budget=0

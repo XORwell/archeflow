@@ -111,7 +111,7 @@ teardown() {
   run "$LIB_DIR/archeflow-init.sh" quick-fix
   [ "$status" -eq 0 ]
   [ -f .archeflow/config.yaml ]
-  # Nested includes.* must resolve without yq (awk fallback).
+  # Nested includes.* resolve with the built-in YAML converter (no yq).
   [ -f .archeflow/teams/team.yaml ]
   [ -f .archeflow/workflows/workflow.yaml ]
   [ -f .archeflow/domains/domain.yaml ]
