@@ -1,0 +1,5 @@
+# Follow "source" statements (their paths are given by "# shellcheck source=" comments,
+# relative to the repository root), so variables such as AF_LOG_PREFIX that only the
+# sourced lib/archeflow-common.sh reads are not reported as unused.
+external-sources=true
+source-path=SCRIPTDIR/..
