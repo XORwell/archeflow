@@ -1,8 +1,7 @@
 ---
 name: presence
 description: |
-  Defines how ArcheFlow communicates its activity to the user -- visible but not noisy.
-  Show value, not process. Auto-loaded by the run skill.
+  How ArcheFlow reports its activity to the user: short status lines, outcomes not mechanics.
 user-invocable: false
 ---
 

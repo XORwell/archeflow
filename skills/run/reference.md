@@ -1,7 +1,25 @@
 # ArcheFlow Run: reference
 
-Reference material for `SKILL.md` in this directory. The main flow is in `SKILL.md`; this
-file covers optional features, the event schema and the artifact list.
+On-demand reference for `SKILL.md` in this directory: read it only when a run uses lenses,
+patterns, Ollama or the pipeline strategy, emits an optional event, or you need the artifact list.
+A standard run needs only `SKILL.md`.
+
+## Start options
+
+- `--dry-run`: run Plan only, show workflow, agent count, Creator confidence and estimated cost,
+  then ask whether to continue (`--start-from do`).
+- `--start-from <phase>`: the artifacts of all earlier phases must exist (do: `plan-creator.md`;
+  check: plus `do-maker.md` and `do-maker.diff`; act: plus `check-*.md`); stop with an error if
+  one is missing.
+- `git.enabled: false`: skip every `archeflow-git.sh` step. The Maker edits the project directly,
+  `git diff > .archeflow/artifacts/<run_id>/do-maker.diff` (in a git repository) replaces
+  integrate, and nothing is merged.
+
+## Merge approved later
+
+A run that ended `awaiting_merge`, when the user now says yes: `SKILL.md` Merge steps 3-5, emit
+`run.merged` `{"base": <base>, "strategy": ...}`, then Completion step 6 with status `merged` (a
+new index line; the last line of a run wins) and step 7.
 
 ## Events
 
@@ -112,19 +130,6 @@ that says fix/bug/patch/hotfix): no cycles.
 4. Sage.
 5. 0 CRITICAL: Merge as in `SKILL.md`. CRITICAL: one targeted Maker round, review again; still
    CRITICAL: stop and report the branch. WARNINGs are logged, they do not block.
-
-## Progress display
-
-```
-━━━ ArcheFlow Run: <task> ━━━━━━━━━━━━━━━━━━━
-Run ID: <run_id> | Workflow: standard | Cycle: 1/2
-[Plan]  Explorer researching...        -> done (35s)
-[Plan]  Creator designing proposal...  -> done (confidence 0.8)
-[Do]    Maker implementing...          -> done (4 files, 8 tests)
-[Check] Guardian reviewing...          -> APPROVED
-[Act]   All approved, merging...       -> merged into main
-━━━ Complete: 1 cycle ━━━━━━━━━━━━━━━━━━━━━━━
-```
 
 ## Effectiveness scores and replay
 

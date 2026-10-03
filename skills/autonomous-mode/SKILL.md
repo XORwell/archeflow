@@ -1,6 +1,7 @@
 ---
 name: autonomous-mode
-description: Use when the user wants to run ArcheFlow orchestrations unattended -- overnight sessions, batch processing multiple tasks, or fully autonomous coding. Handles self-organization, progress logging, and safe stopping.
+description: |
+  Running ArcheFlow unattended (overnight, batches of tasks): self-organization, progress logging, safe stopping.
 user-invocable: false
 ---
 

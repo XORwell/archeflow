@@ -1,11 +1,7 @@
 ---
 name: multi-project
 description: |
-  Multi-project orchestration for workspaces with 20+ repos. Builds a dependency DAG across
-  projects, runs independent sub-runs in parallel, shares artifacts between dependent projects,
-  and enforces a shared budget. Each sub-run uses the standard `run` skill internally.
-  <example>User: "archeflow:multi-project" with a multi-run.yaml</example>
-  <example>User: "Run this across archeflow, writing-tool, and book"</example>
+  Multi-project ArcheFlow runs from a multi-run.yaml: dependency DAG across repositories, parallel sub-runs, shared budget.
 user-invocable: false
 ---
 

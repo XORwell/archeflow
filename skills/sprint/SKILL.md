@@ -105,7 +105,7 @@ ATTENDED: ask before the next batch. AUTONOMOUS: next batch right away.
 
 When nothing is schedulable: final report (duration, completed / failed / remaining, projects,
 branches to merge). If the workspace keeps a status log (e.g. `docs/status.md`), append a short
-summary. Checkpoint and budget rules: `archeflow:shadow-detection`, Policy Boundaries.
+summary. Checkpoint and budget rules: Policy Boundaries in `<archeflow-root>/skills/shadow-detection/reference.md`.
 
 ## Errors
 
