@@ -29,6 +29,13 @@ set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "Error: jq is required. Install: https://jqlang.github.io/jq/" >&2; exit 2; }
 
+# awk for numbers: always the C locale. awk implementations that honour LC_NUMERIC
+# (mawk, BSD/macOS awk, gawk in POSIX mode) print "0,67" under a decimal-comma
+# locale such as de_DE.UTF-8 and parse "0.5" as 0, which breaks the JSON output
+# (jq tonumber) and every threshold comparison. LC_ALL, not LC_NUMERIC: LC_ALL
+# set by the user would override LC_NUMERIC.
+num_awk() { LC_ALL=C awk "$@"; }
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -85,7 +92,7 @@ compute_score() {
     local denominator=$((resolved + new_findings + regressed))
     local score="0.00"
     if [[ "$denominator" -gt 0 ]]; then
-        score=$(awk "BEGIN {printf \"%.2f\", $resolved / $denominator}")
+        score=$(num_awk "BEGIN {printf \"%.2f\", $resolved / $denominator}")
     elif [[ "$persistent" -eq 0 && "$resolved" -eq 0 && "$new_findings" -eq 0 ]]; then
         score="1.00"
     fi
@@ -93,13 +100,13 @@ compute_score() {
     # Status
     local status="stuck"
     local action="stop_immediately"
-    if (( $(awk "BEGIN {print ($score > 0.8) ? 1 : 0}") )); then
+    if (( $(num_awk "BEGIN {print ($score > 0.8) ? 1 : 0}") )); then
         status="converging"
         action="continue"
-    elif (( $(awk "BEGIN {print ($score >= 0.5) ? 1 : 0}") )); then
+    elif (( $(num_awk "BEGIN {print ($score >= 0.5) ? 1 : 0}") )); then
         status="stalling"
         action="continue_with_caution"
-    elif (( $(awk "BEGIN {print ($score > 0) ? 1 : 0}") )); then
+    elif (( $(num_awk "BEGIN {print ($score > 0) ? 1 : 0}") )); then
         status="diverging"
         action="stop_if_2_consecutive"
     fi
@@ -328,7 +335,7 @@ wiggum_check() {
         score=$(jq -r '.convergence_score // 1' "$cf" 2>/dev/null || echo "1")
         # Non-numeric scores (null, garbage) count as converging, not as 0.
         [[ "$score" =~ ^[0-9]*\.?[0-9]+$ ]] || score=1
-        if awk -v s="$score" 'BEGIN {exit !(s < 0.5)}'; then
+        if num_awk -v s="$score" 'BEGIN {exit !(s < 0.5)}'; then
             consecutive_diverging=$((consecutive_diverging + 1))
         else
             consecutive_diverging=0
@@ -380,11 +387,11 @@ wiggum_check() {
         done
         [[ "$budget" =~ ^[0-9]*\.?[0-9]+$ ]] || budget=0
 
-        if awk -v b="$budget" 'BEGIN {exit !(b > 0)}'; then
+        if num_awk -v b="$budget" 'BEGIN {exit !(b > 0)}'; then
             local spent_pct
-            spent_pct=$(awk -v c="$total_cost" -v b="$budget" 'BEGIN {printf "%.0f", (c / b) * 100}')
+            spent_pct=$(num_awk -v c="$total_cost" -v b="$budget" 'BEGIN {printf "%.0f", (c / b) * 100}')
             if [[ "$spent_pct" -ge 95 && "$break_type" != "hard" ]]; then
-                total_cost=$(awk -v c="$total_cost" 'BEGIN {printf "%.2f", c}')
+                total_cost=$(num_awk -v c="$total_cost" 'BEGIN {printf "%.2f", c}')
                 breaks+=("soft|Budget >95% spent (\$$total_cost of \$$budget, ${spent_pct}%)")
                 break_type="soft"
             fi

@@ -23,7 +23,9 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bats jq shellcheck
+          sudo apt-get install -y --no-install-recommends bats jq shellcheck gawk locales
+          # de_DE.UTF-8 for tests/archeflow-locale.bats (decimal-comma locale)
+          sudo locale-gen de_DE.UTF-8
 
       - name: Syntax check shell scripts
         run: |
@@ -37,6 +39,8 @@ jobs:
         run: shellcheck --severity=error lib/*.sh scripts/*.sh
 
       - name: Run bats tests
+        env:
+          ARCHEFLOW_REQUIRE_DE_LOCALE: "1"
         run: ./scripts/run-tests.sh
 
   plugin:
