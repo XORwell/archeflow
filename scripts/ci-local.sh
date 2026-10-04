@@ -13,7 +13,9 @@ ENGINE="$(command -v podman || command -v docker || true)"
 "$ENGINE" run --rm -e XDG_CONFIG_HOME=/root/.config -v "$ROOT":/src:ro,Z docker.io/library/ubuntu:24.04 bash -c '
   set -e
   apt-get update -qq >/dev/null
-  apt-get install -y -qq --no-install-recommends bats jq git shellcheck ca-certificates parallel python3-yaml >/dev/null
+  apt-get install -y -qq --no-install-recommends bats jq git shellcheck ca-certificates parallel python3-yaml gawk locales >/dev/null
+  locale-gen de_DE.UTF-8 >/dev/null
+  export ARCHEFLOW_REQUIRE_DE_LOCALE=1
   mkdir /work && cp -a /src/. /work/ && cd /work
   git config --global user.email ci@example.com
   git config --global user.name ci

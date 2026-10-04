@@ -26,6 +26,13 @@ All notable changes to ArcheFlow are documented in this file.
 ### Removed
 - The unused `count_pattern` and `count_headings` helpers in `lib/archeflow-shadow.sh`.
 
+### Fixed
+- Convergence scoring and the Wiggum Break checks work under a locale with a decimal comma
+  (for example `de_DE.UTF-8`). With an awk that honours the locale (mawk, macOS awk, gawk in
+  POSIX mode) `archeflow-convergence.sh score` printed `0,67`, which made its JSON output fail,
+  and the budget soft break misread fractional amounts. Numbers are now always
+  computed and printed with a decimal point.
+
 ## [0.11.0] -- 2026-09-24
 
 A hardening release: the plugin now installs and works from a clean machine, the documented
