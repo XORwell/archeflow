@@ -1,11 +1,7 @@
 ---
 name: templates
 description: |
-  Template gallery for sharing workflows, team presets, archetypes, domain configs, and complete
-  setup bundles across ArcheFlow projects. Supports init-from-template, save-as-template, and
-  clone-from-project operations.
-  <example>User: "save this ArcheFlow setup as a template"</example>
-  <example>User: "which ArcheFlow templates do I have?"</example>
+  ArcheFlow template gallery: save, share and initialise workflows, team presets, archetypes, domains and bundles.
 user-invocable: false
 ---
 

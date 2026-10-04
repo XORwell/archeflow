@@ -13,7 +13,7 @@ ENGINE="$(command -v podman || command -v docker || true)"
 "$ENGINE" run --rm -e XDG_CONFIG_HOME=/root/.config -v "$ROOT":/src:ro,Z docker.io/library/ubuntu:24.04 bash -c '
   set -e
   apt-get update -qq >/dev/null
-  apt-get install -y -qq --no-install-recommends bats jq git shellcheck ca-certificates >/dev/null
+  apt-get install -y -qq --no-install-recommends bats jq git shellcheck ca-certificates parallel python3-yaml >/dev/null
   mkdir /work && cp -a /src/. /work/ && cd /work
   git config --global user.email ci@example.com
   git config --global user.name ci

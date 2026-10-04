@@ -70,38 +70,52 @@ write_events() {
   ' > "$f"
 }
 
+_fuzz_report() {  # _fuzz_report <seq mode>
+  local mode="$1" p
+  for p in "${PAYLOADS[@]}"; do
+    write_events "$p" .archeflow/events/r1.jsonl "$mode"
+    "$LIB_DIR/archeflow-report.sh" .archeflow/events/r1.jsonl >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-report.sh" .archeflow/events/r1.jsonl --summary >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-dag.sh" .archeflow/events/r1.jsonl --no-color >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-progress.sh" r1 >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-progress.sh" r1 --json >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-replay.sh" timeline r1 >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-replay.sh" whatif r1 >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-replay.sh" compare r1 --json >/dev/null 2>&1 || true
+    assert_not_pwned "$p" "report/dag/progress/replay mode=$mode"
+  done
+}
+
 @test "fuzz: report/dag/progress/replay never evaluate event fields" {
-  for mode in ok bad; do
-    for p in "${PAYLOADS[@]}"; do
-      write_events "$p" .archeflow/events/r1.jsonl "$mode"
-      "$LIB_DIR/archeflow-report.sh" .archeflow/events/r1.jsonl >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-report.sh" .archeflow/events/r1.jsonl --summary >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-dag.sh" .archeflow/events/r1.jsonl --no-color >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-progress.sh" r1 >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-progress.sh" r1 --json >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-replay.sh" timeline r1 >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-replay.sh" whatif r1 >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-replay.sh" compare r1 --json >/dev/null 2>&1 || true
-      assert_not_pwned "$p" "report/dag/progress/replay mode=$mode"
-    done
+  _fuzz_report ok
+}
+
+@test "fuzz: report/dag/progress/replay never evaluate event fields (poisoned seq/parent)" {
+  _fuzz_report bad
+}
+
+_fuzz_memory_events() {  # _fuzz_memory_events <seq mode>
+  local mode="$1" p
+  for p in "${PAYLOADS[@]}"; do
+    rm -rf .archeflow/memory; mkdir -p .archeflow/memory
+    write_events "$p" .archeflow/events/r1.jsonl "$mode"
+    write_events "$p" .archeflow/events/r0.jsonl "$mode"
+    jq -cn --arg p "$p" '{run_id:"r0"}, {run_id:$p}, {run_id:"../../etc/passwd"}, {run_id:"r1"}' \
+      > .archeflow/events/index.jsonl
+    "$LIB_DIR/archeflow-memory.sh" extract .archeflow/events/r1.jsonl >/dev/null 2>&1 || true
+    "$LIB_DIR/archeflow-memory.sh" regression-check .archeflow/events/r1.jsonl >/dev/null 2>&1 || true
+    jq -cn --arg p "$p" '{run_id:"r1", lessons_injected:["m-001", $p]}' > .archeflow/memory/audit.jsonl
+    "$LIB_DIR/archeflow-memory.sh" audit-check r1 >/dev/null 2>&1 || true
+    assert_not_pwned "$p" "memory extract/regression/audit mode=$mode"
   done
 }
 
 @test "fuzz: memory extract/regression-check/audit-check never evaluate event fields" {
-  for mode in ok bad; do
-    for p in "${PAYLOADS[@]}"; do
-      rm -rf .archeflow/memory; mkdir -p .archeflow/memory
-      write_events "$p" .archeflow/events/r1.jsonl "$mode"
-      write_events "$p" .archeflow/events/r0.jsonl "$mode"
-      jq -cn --arg p "$p" '{run_id:"r0"}, {run_id:$p}, {run_id:"../../etc/passwd"}, {run_id:"r1"}' \
-        > .archeflow/events/index.jsonl
-      "$LIB_DIR/archeflow-memory.sh" extract .archeflow/events/r1.jsonl >/dev/null 2>&1 || true
-      "$LIB_DIR/archeflow-memory.sh" regression-check .archeflow/events/r1.jsonl >/dev/null 2>&1 || true
-      jq -cn --arg p "$p" '{run_id:"r1", lessons_injected:["m-001", $p]}' > .archeflow/memory/audit.jsonl
-      "$LIB_DIR/archeflow-memory.sh" audit-check r1 >/dev/null 2>&1 || true
-      assert_not_pwned "$p" "memory extract/regression/audit mode=$mode"
-    done
-  done
+  _fuzz_memory_events ok
+}
+
+@test "fuzz: memory extract/regression-check/audit-check never evaluate event fields (poisoned seq/parent)" {
+  _fuzz_memory_events bad
 }
 
 @test "fuzz: memory decay/add/inject/list/forget never evaluate lesson fields" {
@@ -144,20 +158,27 @@ write_events() {
   done
 }
 
-@test "fuzz: langfuse bridge and backfill never evaluate event fields" {
+# The backfill pipes every event line through the bridge, so it covers both.
+# One test per seq mode, so the two halves run in parallel under bats --jobs.
+_fuzz_langfuse() {
+  local mode="$1" p
   mkdir -p "$HOME/.config/archeflow"
   printf 'LANGFUSE_ENABLED=true\nLANGFUSE_HOST=http://127.0.0.1:9\nLANGFUSE_PUBLIC_KEY=a\nLANGFUSE_SECRET_KEY=b\n' \
     > "$HOME/.config/archeflow/langfuse.env"
-  for mode in ok bad; do
-    for p in "${PAYLOADS[@]}"; do
-      write_events "$p" .archeflow/events/r1.jsonl "$mode"
-      while IFS= read -r line; do
-        printf '%s\n' "$line" | "$LIB_DIR/archeflow-langfuse.sh" >/dev/null 2>&1 || true
-      done < .archeflow/events/r1.jsonl
-      "$LIB_DIR/archeflow-langfuse-backfill.sh" r1 >/dev/null 2>&1 || true
-      assert_not_pwned "$p" "langfuse mode=$mode"
-    done
+  for p in "${PAYLOADS[@]}"; do
+    write_events "$p" .archeflow/events/r1.jsonl "$mode"
+    run "$LIB_DIR/archeflow-langfuse-backfill.sh" r1
+    [[ "$output" == *"sent 10 events"* ]] || { echo "backfill did not replay all events: $output"; return 1; }
+    assert_not_pwned "$p" "langfuse mode=$mode"
   done
+}
+
+@test "fuzz: langfuse bridge and backfill never evaluate event fields" {
+  _fuzz_langfuse ok
+}
+
+@test "fuzz: langfuse bridge and backfill never evaluate event fields (poisoned seq/parent)" {
+  _fuzz_langfuse bad
 }
 
 @test "fuzz: convergence wiggum-check and shadow check-system never evaluate run data" {

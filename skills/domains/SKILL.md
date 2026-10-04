@@ -1,11 +1,7 @@
 ---
 name: domains
 description: |
-  Domain adapter system that maps ArcheFlow concepts (code-oriented by default) to domain-specific
-  equivalents. Enables writing, research, and other non-code workflows to use the same PDCA pipeline
-  with domain-appropriate terminology, metrics, review focus, and context injection.
-  <example>User: "Use ArcheFlow for my short story"</example>
-  <example>Automatically loaded when writing-domain config is detected</example>
+  ArcheFlow domain adapters (code, writing, research): terminology, metrics, review focus and context for non-code runs.
 user-invocable: false
 ---
 

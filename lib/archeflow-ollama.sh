@@ -38,33 +38,25 @@ usage() {
   echo "  chat --tier <haiku|sonnet|opus> [--system-file PATH]   Model from models.mapping in config"
 }
 
-# A config value read with af_config_json (never through a shell line). Prints "" if unset.
-_config_value() {
-  local cfg
-  cfg="$(af_config_json 2>/dev/null)" || { echo "archeflow-ollama: could not parse .archeflow/config.yaml" >&2; return 1; }
-  jq -r "$1 // empty | if type == \"string\" then . else tostring end" <<<"$cfg"
-}
-
 _valid_model() {
   [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ && "$1" != *..* ]]
 }
 
 # Model tag for a tier from models.mapping, with ArcheFlow's defaults.
 _model_for_tier() {
-  local tier="$1" def m
+  local tier="$1" def
   case "$tier" in
     haiku) def="qwen3:8b" ;;
     sonnet|opus) def="qwen3:14b" ;;
     *) echo "archeflow-ollama: unknown tier '${tier}' (haiku, sonnet or opus)" >&2; return 1 ;;
   esac
-  m="$(_config_value ".models.mapping.${tier}")" || return 1
-  printf '%s\n' "${m:-$def}"
+  af_config_get "models.mapping.${tier}" "$def"
 }
 
 ollama_base_url() {
   local h="${ARCHEFLOW_OLLAMA_BASE_URL:-${ARCHFLOW_OLLAMA_BASE_URL:-}}"
   if [[ -z "$h" ]]; then
-    h="$(_config_value '.models.ollama.base_url')" || return 1
+    h="$(af_config_get models.ollama.base_url)"
   fi
   if [[ -z "$h" ]]; then
     h="${OLLAMA_HOST:-127.0.0.1:11434}"

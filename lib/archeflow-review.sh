@@ -37,7 +37,6 @@ STAT_ONLY="false"
 # Helpers
 # ---------------------------------------------------------------------------
 
-# shellcheck disable=SC2034  # read by die() in archeflow-common.sh
 AF_LOG_PREFIX="af-review"
 # shellcheck source=lib/archeflow-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-common.sh"

@@ -1,11 +1,7 @@
 ---
 name: progress
 description: |
-  Live progress file for ArcheFlow orchestrations. Regenerates `.archeflow/progress.md`
-  after every event emission, giving users real-time visibility into run status, budget
-  usage, and DAG shape -- watchable from a second terminal.
-  <example>User: "What's happening with my run?"</example>
-  <example>watch -n 2 cat .archeflow/progress.md</example>
+  Live progress file .archeflow/progress.md for ArcheFlow runs (status, budget, DAG), watchable from a second terminal.
 user-invocable: false
 ---
 

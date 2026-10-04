@@ -61,6 +61,7 @@ generate_progress_json() {
   fi
 
   jq -s '
+    def ntok: if type == "number" then . elif type == "string" then (tonumber? // 0) else 0 end;
     # Extract run metadata
     (.[0] // {}) as $first |
     ([.[] | select(.type == "run.start")] | first // {}) as $run_start_evt |
@@ -82,7 +83,12 @@ generate_progress_json() {
       agent: (.data.archetype // .agent // "unknown"),
       phase: .phase,
       duration_s: ((.data.duration_ms // 0) / 1000 | floor),
-      tokens: (.data.tokens // (.data.tokens_input // 0) + (.data.tokens_output // 0)),
+      # tokens: a number, {"input": n, "output": n}, or tokens_input + tokens_output.
+      tokens: (.data.tokens as $t
+        | if ($t | type) == "number" then $t
+          elif ($t | type) == "string" and ($t | tonumber? // null) != null then ($t | tonumber)
+          elif ($t | type) == "object" then (($t.input | ntok) + ($t.output | ntok))
+          else ((.data.tokens_input | ntok) + (.data.tokens_output | ntok)) end),
       cost_usd: (.data.estimated_cost_usd // .data.cost_usd // 0),
       seq: .seq
     }] as $completed |
@@ -95,10 +101,12 @@ generate_progress_json() {
         start_ts: .ts,
         seq: .seq
       }] |
+      # (a lookup table instead of a scan of $completed per agent.start)
+      ($completed | map(.agent)) as $done_list |
+      (reduce ($done_list[] | strings) as $a ({}; .[$a] = true)) as $done |
       [.[] | select(
         .agent as $a |
-        .seq as $s |
-        ($completed | map(.agent) | index($a)) == null
+        if ($a | type) == "string" then $done[$a] == null else ($done_list | index($a)) == null end
       )]
     ) as $running |
 
@@ -175,21 +183,46 @@ generate_progress_markdown() {
     return 1
   fi
 
-  # Extract fields for the markdown template
+  # Extract fields for the markdown template: one jq call; each field is what
+  # "$(echo "$progress_json" | jq -r <field>)" gave (NUL-separated here).
   local run_id task workflow status phase active_agent start_ts
   local budget_used budget_total budget_percent total_events
-
-  run_id=$(echo "$progress_json" | jq -r '.run_id')
-  task=$(echo "$progress_json" | jq -r '.task')
-  workflow=$(echo "$progress_json" | jq -r '.workflow')
-  status=$(echo "$progress_json" | jq -r '.status')
-  phase=$(echo "$progress_json" | jq -r '.phase')
-  active_agent=$(echo "$progress_json" | jq -r '.active_agent // "none"')
-  start_ts=$(echo "$progress_json" | jq -r '.start_ts')
-  budget_used=$(echo "$progress_json" | jq -r '.budget_used_usd')
-  budget_total=$(echo "$progress_json" | jq -r '.budget_total_usd')
-  budget_percent=$(echo "$progress_json" | jq -r '.budget_percent')
-  total_events=$(echo "$progress_json" | jq -r '.total_events')
+  local latest_seq latest_type latest_agent latest_phase latest_ts
+  local -a fields=()
+  local field
+  while IFS= read -r -d '' field; do fields+=("$field"); done < <(echo "$progress_json" | jq -j '
+    def pp($i):
+      if type == "object" then
+        (if length == 0 then "{}" else
+          "{\n" + ([to_entries[] | $i + "  " + (.key | tojson) + ": " + (.value | pp($i + "  "))] | join(",\n"))
+          + "\n" + $i + "}" end)
+      elif type == "array" then
+        (if length == 0 then "[]" else
+          "[\n" + (map($i + "  " + pp($i + "  ")) | join(",\n")) + "\n" + $i + "]" end)
+      else tojson end;
+    def rstrip_nl: if endswith("\n") then .[:-1] | rstrip_nl else . end;
+    def cap: (if type == "string" then . else pp("") end)
+      | (if contains("\u0000") then split("\u0000") | join("") else . end) | rstrip_nl;
+    [.run_id, .task, .workflow, .status, .phase, (.active_agent // "none"), .start_ts,
+     .budget_used_usd, .budget_total_usd, .budget_percent, .total_events,
+     .latest_event.seq, .latest_event.type, (.latest_event.agent // "_"), .latest_event.phase,
+     .latest_event.ts] | .[] | cap + "\u0000"' 2>/dev/null || true)
+  run_id="${fields[0]:-}"
+  task="${fields[1]:-}"
+  workflow="${fields[2]:-}"
+  status="${fields[3]:-}"
+  phase="${fields[4]:-}"
+  active_agent="${fields[5]:-}"
+  start_ts="${fields[6]:-}"
+  budget_used="${fields[7]:-}"
+  budget_total="${fields[8]:-}"
+  budget_percent="${fields[9]:-}"
+  total_events="${fields[10]:-}"
+  latest_seq="${fields[11]:-}"
+  latest_type="${fields[12]:-}"
+  latest_agent="${fields[13]:-}"
+  latest_phase="${fields[14]:-}"
+  latest_ts="${fields[15]:-}"
 
   # Calculate elapsed time
   local elapsed_display="n/a"
@@ -277,12 +310,6 @@ EOF
   echo ""
 
   # Latest event
-  local latest_seq latest_type latest_agent latest_phase latest_ts
-  latest_seq=$(echo "$progress_json" | jq -r '.latest_event.seq')
-  latest_type=$(echo "$progress_json" | jq -r '.latest_event.type')
-  latest_agent=$(echo "$progress_json" | jq -r '.latest_event.agent // "_"')
-  latest_phase=$(echo "$progress_json" | jq -r '.latest_event.phase')
-  latest_ts=$(echo "$progress_json" | jq -r '.latest_event.ts')
   local latest_time
   latest_time=$(echo "$latest_ts" | grep -o '[0-9][0-9]:[0-9][0-9]' | head -1 || echo "$latest_ts")
 

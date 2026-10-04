@@ -1,11 +1,7 @@
 ---
 name: cost-tracking
 description: |
-  Cost aggregation, budget enforcement, and model selection for ArcheFlow orchestrations.
-  Tracks per-agent and per-run token costs, enforces budgets, and recommends the cheapest
-  model that meets quality requirements per archetype and domain.
-  <example>User: "How much did that orchestration cost?"</example>
-  <example>Automatically active when budget is configured</example>
+  ArcheFlow cost tracking: per-agent and per-run token cost, budget enforcement, cheapest adequate model per role and domain.
 user-invocable: false
 ---
 

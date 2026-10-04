@@ -17,8 +17,14 @@
 #   af_append <file> <line>   append one line, refusing to follow a symlink
 #   af_check_state_dirs       exit 1 if .archeflow/ or one of its state directories
 #                             is a symlink or resolves outside the repository
-#   af_yaml_to_json <file>    YAML -> JSON (yq, python3+PyYAML, or archeflow-yaml.sh)
+#   af_yaml_get <file> <key>[|<key>...] [default]
+#                             scalar at a dotted path, as written (see "YAML" below)
+#   af_yaml_list <file> <key> scalar items of a list, one per line
+#   af_yaml_map <file> <key>  scalar entries of a map, NUL-separated key/value pairs
+#   af_yaml_to_json <file>    typed YAML -> JSON (lib/archeflow-yaml.sh)
 #   af_config_json            .archeflow/config.yaml as JSON ("{}" if absent)
+#   af_config_get <key>[|<key>...] [default]
+#                             af_yaml_get on .archeflow/config.yaml
 #   af_config_test_command    the top-level test_command of .archeflow/config.yaml
 #   af_default_branch         repository default branch (origin/HEAD, main,
 #                             master, else the current branch; may print "")
@@ -129,18 +135,59 @@ af_check_state_dirs() {
   return 0
 }
 
-# YAML -> JSON: mikefarah yq, else python3+PyYAML, else the built-in
-# dependency-free converter. The file path is always passed as an argument.
+# --- YAML -------------------------------------------------------------------
+# All YAML is read by lib/archeflow-yaml.sh (bash/awk/jq only), so every host
+# parses it the same way. Values are data: they are printed, never evaluated.
+#
+#   af_yaml_get <file> <key>[|<key>...] [default]
+#       Scalar at a dotted path ("costs.budget_usd"), printed as written in
+#       the file (numbers and booleans keep their spelling; quotes are
+#       removed, "\"" and "''" unescaped). With several "|"-separated paths
+#       the first non-empty one wins. Prints <default> ("" if not given) when
+#       the file or key is missing, or the value is null, empty, multi-line
+#       (a block scalar) or not a scalar, so a value never spans lines of the
+#       caller's output. A line the parser cannot read is skipped, not fatal.
+#   af_yaml_list <file> <key>
+#       The single-line scalar items of the list at <key>, one per line.
+#   af_yaml_map <file> <key>
+#       The single-line scalar entries of the map at <key> as NUL-terminated
+#       key, value pairs (null becomes ""). Read with
+#       while IFS= read -r -d '' k && IFS= read -r -d '' v; do ...; done
+_AF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+_af_yaml_text() {
+  [[ -f "$1" ]] || return 1
+  "$_AF_LIB_DIR/archeflow-yaml.sh" --text "$1" 2>/dev/null
+}
+
+af_yaml_get() {
+  local file="$1" keys="$2" def="${3:-}" v=""
+  v="$(_af_yaml_text "$file" | jq -r --arg k "$keys" '
+    . as $d
+    | first(($k | split("|"))[] as $key
+        | ($d | try getpath($key | split(".")) catch null)
+        | strings | select(. != "" and (test("\n") | not)))' 2>/dev/null)" || v=""
+  printf '%s\n' "${v:-$def}"
+}
+
+af_yaml_list() {
+  _af_yaml_text "$1" | jq -r --arg k "$2" '
+    try getpath($k | split(".")) catch null
+    | if type == "array" then .[] | strings | select(test("\n") | not) else empty end' 2>/dev/null || true
+}
+
+af_yaml_map() {
+  _af_yaml_text "$1" | jq -j --arg k "$2" '
+    try getpath($k | split(".")) catch null
+    | if type == "object" then to_entries[] else empty end
+    | select(.value == null or (.value | type == "string" and (test("\n") | not)))
+    | .key, "\u0000", (.value // ""), "\u0000"' 2>/dev/null || true
+}
+
+# Typed YAML -> JSON; exits non-zero when the file uses YAML outside the
+# supported subset (see lib/archeflow-yaml.sh).
 af_yaml_to_json() {
-  local file="$1" here
-  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if command -v yq >/dev/null 2>&1 && yq --version 2>&1 | grep -qi mikefarah; then
-    yq -o=json '.' "$file"
-  elif command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
-    python3 -c 'import sys, json, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1])), default=str))' "$file"
-  else
-    "$here/archeflow-yaml.sh" "$file"
-  fi
+  "$_AF_LIB_DIR/archeflow-yaml.sh" "$1"
 }
 
 # .archeflow/config.yaml as a JSON object; "{}" when the file is absent or empty.
@@ -148,24 +195,19 @@ af_yaml_to_json() {
 af_config_json() {
   local file="${AF_CONFIG_FILE:-.archeflow/config.yaml}" json
   [[ -f "$file" ]] || { echo '{}'; return 0; }
-  # The dependency-free converter only, so every host parses config the same way.
-  json="$("$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/archeflow-yaml.sh" "$file")" || return 1
+  json="$(af_yaml_to_json "$file")" || return 1
   jq -c 'if type == "object" then . else {} end' <<<"${json:-null}"
 }
 
+# af_yaml_get on .archeflow/config.yaml (or $AF_CONFIG_FILE).
+af_config_get() {
+  af_yaml_get "${AF_CONFIG_FILE:-.archeflow/config.yaml}" "$@"
+}
+
 # Top-level test_command (a nested "x: {test_command: ...}" never counts).
-# Prints "" when unset. Falls back to a plain top-level line match when the
-# config uses YAML the converters cannot read.
+# Prints "" when unset.
 af_config_test_command() {
-  local file="${AF_CONFIG_FILE:-.archeflow/config.yaml}" json
-  [[ -f "$file" ]] || return 0
-  if json="$(af_config_json 2>/dev/null)"; then
-    jq -r '.test_command // empty | if type == "string" then . else tostring end' <<<"$json"
-  else
-    awk '/^test_command:/ { sub(/^test_command:[[:space:]]*/, ""); sub(/[[:space:]]+#.*$/, "")
-           if ($0 ~ /^".*"$/ || $0 ~ /^\047.*\047$/) $0 = substr($0, 2, length($0) - 2)
-           print; exit }' "$file"
-  fi
+  af_config_get test_command
 }
 
 af_append() {
