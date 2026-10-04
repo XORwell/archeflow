@@ -57,24 +57,6 @@ count_lines() {
     wc -l < "$file" | tr -d ' '
 }
 
-# --- Count occurrences of a pattern ---
-count_pattern() {
-    local file="$1"
-    local pattern="$2"
-    local n
-    n=$(grep -c -i "$pattern" "$file" 2>/dev/null) || true
-    echo "${n:-0}"
-}
-
-# --- Count sections/headings ---
-count_headings() {
-    local file="$1"
-    local pattern="$2"
-    local n
-    n=$(grep -c "^#" "$file" 2>/dev/null) || true
-    echo "${n:-0}"
-}
-
 # --- Extract file references (path-like tokens) from prose ---
 # A token counts as a file reference if it looks like name.ext. Excluded:
 #   - abbreviations whose dot-separated parts are all single letters

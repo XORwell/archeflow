@@ -1,0 +1,120 @@
+# Failure modes: reference
+
+On-demand detail for `SKILL.md` in this directory: the detection rules behind
+`archeflow-shadow.sh` and `archeflow-convergence.sh`, and the policy boundaries used by
+`archeflow:sprint`. A run needs only the corrective actions in `SKILL.md`.
+
+## Archetype Shadows
+
+| Archetype | Shadow | Detect (any) |
+|-----------|--------|-------------|
+| Explorer | Rabbit Hole | Output >2000w without Recommendation; >3 tangents; >15 files no patterns; no synthesis in final 25% |
+| Creator | Over-Architect | >2 new abstractions for one feature; "future-proof" in rationale; scope exceeds task >50% (proposal words > 1.5x `--task-words`/`ARCHEFLOW_TASK_WORDS`; skipped if unset); >1 new package |
+| Maker | Rogue | Counted on code files of the run diff (`--diff do-maker.diff`; docs, images, licence and lock files ignored): >=3 code files and no test file changed; >=10 changed code lines and no test-run evidence in the Maker's report (`do-maker.md`); code files the proposal does not mention |
+| Guardian | Paranoid | CRITICAL:WARNING ratio strictly >2:1 with >=3 CRITICALs (4:2 does not fire, 3:0 does); zero APPROVED in 3+ reviews; <50% findings include fix; findings require compromised systems |
+| Skeptic | Paralytic | >7 challenges with <50% alternatives; 2+ distinct concern sentences each repeated (near-)verbatim; >3 findings outside scope |
+| Trickster | False Alarm | Findings in untouched code; >10 findings for <5 files; impossible scenarios; >3 without repro steps |
+| Sage | Bureaucrat | Review words >2x diff lines; findings outside changeset; >2 "consider" without action; suggesting docs for trivial functions |
+
+## System Shadows
+
+Orchestration-level dysfunction that isn't tied to one archetype.
+
+| Shadow | Detect |
+|--------|--------|
+| **Tunnel Vision** | 2+ reviewers ran (`check-*.md`) and all of the cycle's 3+ findings (`findings-cycle-<N>.json`) share one category. A single reviewer or a run without findings never fires. |
+| **Echo Chamber** | Unanimous approval in the current cycle: 2+ `review.verdict` events, all APPROVED with no findings (without `review.verdict` events: 2+ check-phase `agent.complete` events, none mentioning CRITICAL/WARNING). Elapsed time is not measured; apply the "<30s on standard/thorough" judgement manually |
+| **Gold Plating** | Maker working on INFO fixes while CRITICALs remain open |
+| **Analysis Paralysis** | Plan phase >2x longer than Do phase; Explorer spawned 3+ times |
+| **Cargo Cult** | Memory lesson injected but the same finding repeats anyway (judged by the orchestrator from `archeflow-memory.sh audit-check <run_id>`; not part of `check-system`) |
+| **Broken Window** | 3+ WARNING lessons recorded in the project's memory (`lessons.jsonl`), across any runs |
+| **Scope Creep** | Maker changes >2x files listed in proposal |
+
+Check: `<archeflow-root>/lib/archeflow-shadow.sh check-system <run_id> --cycle <N>` after each cycle. It reads
+`plan-creator.md`, `do-maker.diff`, `check-*.md` and `findings-cycle-<N>.json` from
+`.archeflow/artifacts/<run_id>/` and the run's event log, and logs each detection as a
+`shadow.detected` event (archetype `system`). Exit 0: shadows found (listed); 1: clean; 2: error.
+
+Per-agent check: `<archeflow-root>/lib/archeflow-shadow.sh detect <role> <artifact> --run-id <run_id> --cycle <N>`
+(see `archeflow:run`, Failure-mode checks; the Maker also needs `--diff`). Detections are logged
+as `shadow.detected` events, which the Wiggum Break check counts.
+
+---
+
+## Policy Boundaries
+
+Operational limits that protect session quality, cost, and resumability.
+
+### Checkpoint Policy
+
+Every **45 minutes** or **3 completed tasks** (whichever first):
+
+1. Commit + push all work in progress
+2. Write a handoff summary to the workspace status log (e.g. `docs/status.md`), if one exists
+3. Log token spend so far
+4. Compare output quality: last task vs first task
+5. If quality degrading -> STOP with clean state
+6. If budget >80% spent -> STOP with clean state
+7. Otherwise -> continue
+
+### Budget Gate
+
+| Threshold | Action |
+|-----------|--------|
+| 50% budget spent | Log warning, continue |
+| 80% budget spent | Downgrade models (sonnet->haiku for reviewers) |
+| 95% budget spent | Complete current task, then STOP |
+| 100% budget | STOP immediately, commit WIP |
+
+### Wiggum Break (circuit breaker)
+
+The **Wiggum Break** is ArcheFlow's circuit breaker: it stops a run that keeps going without
+making progress, saves the state, and hands control back to the user. The name is a pun on the
+"Ralph Wiggum" technique (Geoffrey Huntley's name for running a coding agent in a loop until the
+job is done): the Wiggum Break is the rule that decides when such a loop has to stop.
+
+Check: `<archeflow-root>/lib/archeflow-convergence.sh wiggum-check <run_id>`. It reads the run's
+event log (`.archeflow/events/<run_id>.jsonl`) and artifacts (`.archeflow/artifacts/<run_id>/`:
+`findings-cycle-<N>.json`, `convergence-cycle-<N>.json`). Exit 0 with
+`{"wiggum_break": true, "type": "hard"|"soft", "triggers": [...]}`: break, also logged as a
+`wiggum.break` event with that JSON. Exit 1 with `{"wiggum_break": false}`: continue. Exit 2:
+error (bad run ID, missing files).
+
+**Hard breaks** (halt immediately, commit WIP):
+
+| Trigger | Reason |
+|---------|--------|
+| 3 consecutive agent failures/timeouts (`agent.failed`/`agent.timeout` events) | Infrastructure issue, not a code problem |
+| 3 consecutive task failures in sprint (tracked by the sprint runner, not `wiggum-check`) | Something systemic is wrong |
+| Same shadow (archetype + shadow) detected 3+ times in one cycle (`data.cycle`; events without it count as cycle 1) | Task needs to be broken down or re-scoped |
+| Test suite broken after merge (`archeflow-rollback.sh` reverted the merge and logged it) | Halt, keep the branch |
+| 2+ oscillating findings (present in cycle N-2, absent in N-1, present in N; `wiggum-check` compares the last three `findings-cycle-*.json`) | Fundamental tension in review criteria |
+
+**Soft breaks** (finish current task, then halt):
+
+| Signal | Reason |
+|--------|--------|
+| Cycle N findings identical to cycle N-1 | No progress — present best result |
+| Convergence score <0.5 for 2 consecutive cycles | "This needs a different approach" |
+| Budget above 95% (`costs.budget_usd`, from `estimated_cost_usd` in events) | Finish, then stop |
+
+`wiggum-check <run_id>` logs the break as a `wiggum.break` event (its printed JSON: type and
+triggers). The open findings of the run are in the latest `findings-cycle-<N>.json`.
+
+**Which triggers can fire under the default cycle limits** (`fast` 1, `standard` 2, `thorough` 3):
+convergence is scored from cycle 2 on, oscillation needs 3 cycles, "convergence <0.5 twice" needs 3
+cycles, "findings unchanged" needs 2. So in `fast` none of the multi-cycle triggers run; in
+`standard` only "findings unchanged" can fire, at cycle 2; in `thorough` all of them can, but
+oscillation and the two-cycle divergence only at cycle 3. In both cases that is the last cycle,
+so the break changes the reported reason rather than the outcome. The other triggers (agent failures, repeated failure mode, post-merge
+tests, budget) work in every workflow.
+
+### Context Pollution
+
+| Signal | Action |
+|--------|--------|
+| >15 memory lessons injected into one prompt | Prune to top 5 by frequency |
+| >20 findings tracked across cycles | Summarize into top 5 themes |
+| Agent prompt exceeds estimated 50% of context window | Strip examples, keep rules only |
+
+---

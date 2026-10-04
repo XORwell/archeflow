@@ -6,8 +6,13 @@
 #
 # Provides:
 #   - BATS_TEST_TMPDIR: unique temp directory per test
+#   - HOME: a fresh empty directory outside the test repository (XDG_CONFIG_HOME
+#     unset), so no test reads or writes the user's ~/.archeflow or ~/.config
 #   - Mock .archeflow/ structure via a git repo
 #   - LIB_DIR: path to the lib/ scripts under test
+#
+# Tests run in parallel (bats --jobs): keep every path under BATS_TEST_TMPDIR,
+# never use fixed /tmp paths or ports, and do not depend on test order.
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 
@@ -15,6 +20,12 @@ _common_setup() {
   # Create a unique temp directory for this test
   BATS_TEST_TMPDIR="$(mktemp -d)"
   export BATS_TEST_TMPDIR
+
+  # Hermetic home: the scripts read ~/.archeflow/templates and the Langfuse
+  # config under ~/.config/archeflow.
+  _AF_TEST_HOME="$(mktemp -d)"
+  export HOME="$_AF_TEST_HOME"
+  unset XDG_CONFIG_HOME
 
   # Work inside the temp dir so scripts create .archeflow/ there
   cd "$BATS_TEST_TMPDIR"
@@ -38,5 +49,5 @@ _common_setup() {
 _common_teardown() {
   # Return to a safe directory before cleanup
   cd /tmp
-  rm -rf "$BATS_TEST_TMPDIR"
+  rm -rf "$BATS_TEST_TMPDIR" "${_AF_TEST_HOME:-}"
 }

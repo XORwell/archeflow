@@ -1,7 +1,7 @@
 ---
 name: git-integration
 description: |
-  How an ArcheFlow run uses git: a branch per run, a separate worktree for the Maker, integration back into the run branch, the merge into the base branch, rollback and cleanup. Reference for archeflow-git.sh and its configuration.
+  How an ArcheFlow run uses git (run branch, Maker worktree, integrate, merge, rollback, cleanup): reference for archeflow-git.sh and its config.
 user-invocable: false
 ---
 

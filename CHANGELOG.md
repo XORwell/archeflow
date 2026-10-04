@@ -4,6 +4,28 @@ All notable changes to ArcheFlow are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- All YAML (config, lenses, A2A, convergence, git, init and Ollama settings) is read by one
+  parser, `lib/archeflow-yaml.sh`, instead of per-script grep/sed/awk readers with `yq` or
+  PyYAML fallbacks, so every host parses config the same way. Block scalars (`|`, `>` and
+  chomping indicators) are supported; keys at unexpected indentation are now rejected instead of
+  being misread. New helpers in `archeflow-common.sh`: `af_yaml_get`, `af_yaml_list`,
+  `af_yaml_map`, `af_config_get`.
+- Faster event logging: `archeflow-event.sh` no longer rescans the whole log to find an event's
+  automatic parent. The lookup is cached by byte offset under `.archeflow/locks/`; the cache is
+  ignored (and the log rescanned) when the log was rewritten or the cache is corrupt.
+- `archeflow-dag.sh`, `archeflow-report.sh` and `archeflow-progress.sh` build their views in a
+  single jq pass; a DAG of ~1000 events no longer takes seconds. Progress accepts token counts
+  as a number, a string or `{input, output}`.
+- Shorter role definitions and skills with the same protocols; rarely needed detail moved to
+  on-demand reference files (`skills/run/reference.md`, `skills/shadow-detection/reference.md`).
+- Tests run in parallel (`bats --jobs`, when GNU parallel is installed; `ARCHEFLOW_TEST_JOBS`
+  overrides) with a fresh `HOME` per test, so no test reads your `~/.archeflow` or Langfuse
+  config. Fuzz tests also cover memory extract, regression-check and audit-check.
+
+### Removed
+- The unused `count_pattern` and `count_headings` helpers in `lib/archeflow-shadow.sh`.
+
 ### Fixed
 - Convergence scoring and the Wiggum Break checks work under a locale with a decimal comma
   (for example `de_DE.UTF-8`). With an awk that honours the locale (mawk, macOS awk, gawk in

@@ -32,7 +32,7 @@ teardown() {
 }
 
 
-@test "lens: merge works without yq or PyYAML (built-in YAML fallback)" {
+@test "lens: merge needs neither yq nor PyYAML (built-in YAML converter)" {
   mkdir -p "$BATS_TEST_TMPDIR/stub"
   printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/stub/yq"
   printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/stub/python3"
@@ -78,8 +78,8 @@ YAML
   [ "$(jq -cS . <<<"$output")" = "$expected" ]
 }
 
-@test "yaml: fallback converter rejects unsupported block scalars" {
-  printf 'text: |\n  multi\n  line\n' > "$BATS_TEST_TMPDIR/b.yaml"
+@test "yaml: fallback converter rejects unsupported YAML (anchors, flow maps)" {
+  printf 'text: &a x\nmap: {k: v}\n' > "$BATS_TEST_TMPDIR/b.yaml"
   run "$LIB_DIR/archeflow-yaml.sh" "$BATS_TEST_TMPDIR/b.yaml"
   [ "$status" -ne 0 ]
   [[ "$output" == *"unsupported"* ]]

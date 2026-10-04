@@ -487,10 +487,11 @@ YAML
 
 @test "git: a base-branch file starting with '-' is rejected before it reaches git" {
   "$LIB_DIR/archeflow-git.sh" init test-run 2>/dev/null
-  echo "--output=/tmp/x" > .archeflow/runs/test-run/base-branch
+  echo "--output=$BATS_TEST_TMPDIR/x" > .archeflow/runs/test-run/base-branch
   run "$LIB_DIR/archeflow-git.sh" merge test-run
   [ "$status" -ne 0 ]
   [[ "$output" == *"Invalid base branch"* ]]
+  [ ! -e "$BATS_TEST_TMPDIR/x" ]
   [ "$(git branch --show-current)" = "archeflow/test-run" ]
 }
 

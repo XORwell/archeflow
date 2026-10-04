@@ -93,42 +93,126 @@ fi
 
 # Automatic parent (see header). The event file is data: only integer seqs
 # of well-formed events are used.
-if [[ -z "$PARENT_JSON" ]]; then
-  PARENT_JSON="[]"
-  if [[ "$TYPE" != "run.start" && -s "$EVENT_FILE" ]]; then
-    PARENT_JSON=$(jq -cs --arg t "$TYPE" --arg a "$AGENT" '
-      def isint: type == "number" and . >= 1 and . == floor and . < 1e15;
-      [ .[] | select(type == "object" and (.seq | isint)) ] as $ev
-      | ([ $ev[] | select(.type == "run.start" or .type == "phase.transition" or .type == "cycle.boundary") ]
-         | last | .seq) as $anchor
-      | (if $a != "" and ($t == "agent.complete" or $t == "agent.failed" or $t == "agent.timeout"
-                          or $t == "review.verdict" or $t == "shadow.detected" or $t == "decision.point")
-         then ([ $ev[] | select(.type == "agent.start" and .agent == $a) ] | last | .seq)
-         else null end) as $own
-      | [ ($own // $anchor // ($ev | last | .seq)) | select(. != null) ]
-    ' "$EVENT_FILE" 2>/dev/null) || PARENT_JSON="[]"
-    [[ "$PARENT_JSON" =~ ^\[[0-9]*\]$ ]] || PARENT_JSON="[]"
+#
+# The lookup must not rescan the whole log for every event (that made logging
+# O(n) per event). A small state file under .archeflow/locks/ caches what the
+# lookup needs (latest anchor, latest agent.start per agent, latest seq) up to
+# a byte offset of the log, and only the lines appended since are read. It is
+# used only while the log still ends, at that offset, with the event recorded in
+# it; otherwise (log rewritten, truncated, first use) the whole log is scanned
+# again, which gives the same result. The format:
+#   line 1: <size of the log in bytes> <byte length of the last line, with newline>
+#   line 2: the last line of the log (the event this script appended)
+#   line 3: {"anchor": seq|null, "last": seq|null, "starts": {"<agent>": seq}}
+STATE_FILE=".archeflow/locks/events-${RUN_ID}.parents"
+AUTO_PARENT=false
+[[ -z "$PARENT_JSON" && "$TYPE" != "run.start" && -s "$EVENT_FILE" ]] && AUTO_PARENT=true
+[[ -n "$PARENT_JSON" ]] || PARENT_JSON="[]"
+
+LOG_SIZE=0
+[[ -f "$EVENT_FILE" ]] && LOG_SIZE=$(af_as_int "$(wc -c < "$EVENT_FILE" | tr -d ' ')")
+STATE_JSON=""
+SCAN_FROM=0   # byte offset where the scan starts (0 = the whole log)
+if [[ "$LOG_SIZE" -gt 0 && -f "$STATE_FILE" && ! -L "$STATE_FILE" ]]; then
+  {
+    IFS=' ' read -r _st_size _st_len || true
+    IFS= read -r _st_tail || true
+    IFS= read -r STATE_JSON || true
+  } < "$STATE_FILE"
+  _st_size=$(af_as_int "${_st_size:-}" "")
+  _st_len=$(af_as_int "${_st_len:-}" "")
+  if [[ -n "$_st_size" && -n "$_st_len" && "$_st_len" -gt 0 && "$_st_size" -ge "$_st_len" \
+        && "$_st_size" -le "$LOG_SIZE" ]] \
+     && [[ "$(tail -c "+$((_st_size - _st_len + 1))" "$EVENT_FILE" 2>/dev/null | head -c "$_st_len" || true)" == "${_st_tail:-}" ]]; then
+    SCAN_FROM="$_st_size"
+  else
+    STATE_JSON=""
   fi
 fi
 
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Construct the event using jq for reliable JSON assembly
-# Agent is passed as --arg (string), then converted to null if empty via jq expression
-EVENT=$(jq -cn \
-  --arg ts "$TS" \
-  --arg run_id "$RUN_ID" \
-  --argjson seq "$SEQ" \
-  --argjson parent "$PARENT_JSON" \
-  --arg type "$TYPE" \
-  --arg phase "$PHASE" \
-  --arg agent_raw "$AGENT" \
-  --argjson data "$DATA" \
-  '{ts:$ts, run_id:$run_id, seq:$seq, parent:$parent, type:$type, phase:$phase, agent:(if $agent_raw == "" then null else $agent_raw end), data:$data}'
-)
+# One jq pass: fold the unread part of the log into the state, pick the
+# automatic parent, build the event (agent "" becomes null), and fold the event
+# into the state. Prints the event and the new state on two lines. A log that
+# does not parse gives no automatic parent (as before); the event is then built
+# on its own below.
+parent_lookup() {
+  local from="$1" state="$2"
+  { if [[ "$LOG_SIZE" -gt 0 ]]; then tail -c "+$((from + 1))" "$EVENT_FILE"; fi; } | jq -cs \
+    --arg st "$state" --arg auto "$AUTO_PARENT" --arg ts "$TS" --arg run_id "$RUN_ID" \
+    --argjson seq "$SEQ" --argjson parent "$PARENT_JSON" --arg type "$TYPE" --arg phase "$PHASE" \
+    --arg agent_raw "$AGENT" --argjson data "$DATA" '
+    def isint: type == "number" and . >= 1 and . == floor and . < 1e15;
+    def fold($e):
+      if ($e | type) == "object" and ($e.seq | isint) then
+        .last = $e.seq
+        | if $e.type == "run.start" or $e.type == "phase.transition" or $e.type == "cycle.boundary"
+          then .anchor = $e.seq else . end
+        | if $e.type == "agent.start" and ($e.agent | type) == "string"
+          then .starts[$e.agent] = $e.seq else . end
+      else . end;
+    (if $st == "" then {anchor: null, last: null, starts: {}}
+     else ($st | fromjson
+       | if type == "object" and (.anchor == null or (.anchor | isint))
+            and (.last == null or (.last | isint))
+            and (.starts | type) == "object" and ([.starts[] | isint] | all)
+         then {anchor, last, starts} else error("bad state") end) end) as $cached
+    | reduce .[] as $e ($cached; fold($e))
+    | (if $agent_raw != "" and ($type == "agent.complete" or $type == "agent.failed"
+          or $type == "agent.timeout" or $type == "review.verdict" or $type == "shadow.detected"
+          or $type == "decision.point")
+       then .starts[$agent_raw] else null end) as $own
+    | (if $auto == "true" then [ ($own // .anchor // .last) | select(. != null) ]
+         | if tojson | test("^\\[[0-9]*\\]$") then . else [] end
+       else $parent end) as $parent
+    | {ts: $ts, run_id: $run_id, seq: $seq, parent: $parent, type: $type, phase: $phase,
+       agent: (if $agent_raw == "" then null else $agent_raw end), data: $data} as $event
+    | $event, fold($event)
+  ' 2>/dev/null
+}
+NEW_STATE=""
+EVENT=""
+# A cache that cannot be read is ignored: rescan from the start.
+if RESULT=$(parent_lookup "$SCAN_FROM" "$STATE_JSON") \
+   || { [[ "$SCAN_FROM" -gt 0 ]] && RESULT=$(parent_lookup 0 ""); }; then
+  EVENT="${RESULT%%$'\n'*}"
+  NEW_STATE="${RESULT#*$'\n'}"
+fi
+
+if [[ -z "$EVENT" || "$EVENT" != "{"* ]]; then
+  # Construct the event using jq for reliable JSON assembly
+  # Agent is passed as --arg (string), then converted to null if empty via jq expression
+  NEW_STATE=""
+  EVENT=$(jq -cn \
+    --arg ts "$TS" \
+    --arg run_id "$RUN_ID" \
+    --argjson seq "$SEQ" \
+    --argjson parent "$PARENT_JSON" \
+    --arg type "$TYPE" \
+    --arg phase "$PHASE" \
+    --arg agent_raw "$AGENT" \
+    --argjson data "$DATA" \
+    '{ts:$ts, run_id:$run_id, seq:$seq, parent:$parent, type:$type, phase:$phase, agent:(if $agent_raw == "" then null else $agent_raw end), data:$data}'
+  )
+fi
 
 # A committed .archeflow/ can contain symlinks; never append through one.
 af_append "$EVENT_FILE" "$EVENT" || exit 1
+
+# Update the parent-lookup cache (best effort: without it the next event rescans).
+NEW_SIZE=$(af_as_int "$(wc -c < "$EVENT_FILE" | tr -d ' ')")
+_tmp=""
+if [[ "$NEW_STATE" == "{"* && "$NEW_SIZE" -gt "$LOG_SIZE" ]] \
+   && mkdir -p "$(dirname "$STATE_FILE")" && af_refuse_symlink "$STATE_FILE" 2>/dev/null \
+   && _tmp=$(af_tmpfile "$STATE_FILE") \
+   && printf '%s %s\n%s\n%s\n' "$NEW_SIZE" "$((NEW_SIZE - LOG_SIZE))" "$EVENT" "$NEW_STATE" > "$_tmp" \
+   && mv -f "$_tmp" "$STATE_FILE"; then
+  :
+else
+  [[ -z "$_tmp" ]] || rm -f "$_tmp"
+  [[ -L "$STATE_FILE" ]] || rm -f "$STATE_FILE"
+fi
 af_unlock "$LOCK_FILE"
 trap - EXIT
 

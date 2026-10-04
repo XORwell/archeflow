@@ -217,3 +217,27 @@ teardown() {
   [ ! -e pwned ]
   [ "$(tail -1 .archeflow/events/ap3.jsonl | jq -c '.parent')" = "[]" ]
 }
+
+@test "event: the parent cache is not used after the log is rewritten" {
+  "$LIB_DIR/archeflow-event.sh" ap4 run.start plan "" '{}' 2>/dev/null          # 1
+  "$LIB_DIR/archeflow-event.sh" ap4 agent.start plan creator '{}' 2>/dev/null   # 2 -> 1
+  [ -f .archeflow/locks/events-ap4.parents ]
+  # Drop the agent.start: a stale cache would still point agent.complete at 2.
+  head -1 .archeflow/events/ap4.jsonl > "$BATS_TEST_TMPDIR/ap4" && mv "$BATS_TEST_TMPDIR/ap4" .archeflow/events/ap4.jsonl
+  "$LIB_DIR/archeflow-event.sh" ap4 agent.complete plan creator '{}' 2>/dev/null
+  [ "$(tail -1 .archeflow/events/ap4.jsonl | jq -c '[.seq, .parent]')" = "[2,[1]]" ]
+}
+
+@test "event: a corrupt or poisoned parent cache is ignored" {
+  "$LIB_DIR/archeflow-event.sh" ap5 run.start plan "" '{}' 2>/dev/null          # 1
+  "$LIB_DIR/archeflow-event.sh" ap5 agent.start plan creator '{}' 2>/dev/null   # 2
+  size=$(wc -c < .archeflow/events/ap5.jsonl | tr -d ' ')
+  last=$(tail -1 .archeflow/events/ap5.jsonl)
+  printf '%s %s\n%s\n%s\n' "$size" "$(( ${#last} + 1 ))" "$last" \
+    '{"anchor":"$(touch pwned)","last":null,"starts":{"creator":"1;touch pwned"}}' \
+    > .archeflow/locks/events-ap5.parents
+  run "$LIB_DIR/archeflow-event.sh" ap5 agent.complete plan creator '{}'
+  [ "$status" -eq 0 ]
+  [ ! -e pwned ]
+  [ "$(tail -1 .archeflow/events/ap5.jsonl | jq -c '.parent')" = "[2]" ]
+}
